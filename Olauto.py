@@ -11,7 +11,7 @@ def _right(s, amount):
 
 
 def _scriptOutput(s, gui_entry):
-    if guy_entry:
+    if gui_entry:
         return s
     else:
         sys.exit(s)
@@ -32,9 +32,14 @@ def _find_subfolder(Folders_obj, folder_search_name):
 def run_ol_Script(outdest, filefmt, olreadfolder, oldprocessedfolder, gui_entry, proc):
     outdest = os.path.normpath(outdest)
     outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-    inbox = _find_subfolder(outlook.Folders, olprocessedfolder)
+    inbox = _find_subfolder(outlook.Folders, olreadfolder)
+    
     if inbox is None:
         sys.exit(f'No Folder {olreadfolder} found!!! Exiting.')
+
+    procbox = _find_subfolder(outlook.Folders, oldprocessedfolder)
+    if procbox None:
+        sys.exit(f'Folder {oldprocessedfolder} not found!!! Exiting.')
 
 
     messages = inbox.Items
@@ -78,6 +83,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
     b_olatt = True if args.olatt is None else False
     b_olbody = True if args.olboy is None else False
+    if (not b_olatt and not b_olbody):
+        sys.exit('no process choice made, chose between ol attachments saver (--olatt) and ol mail body saver (--olbody)!')
+    if args.outdest == '':
+        sys.exit('No out destination defined using --outdest defined!')
+    if args.olfolder == '':
+        sys.exit('No outlook folderto search mails for defined using --olfolder!')
+    if args.olprocfolder == '':
+        sys.exit('No outlook folder to move processed mails to defined using --olprocfolder!')
+    proc = 'olatt' if b_olatt else 'olbody' if b_olbody else ''
+
+
+    run_ol_Script(args.outdest, args.olfiletype, args.olfolder, args.olprocfolder, False, proc)
 
 
             

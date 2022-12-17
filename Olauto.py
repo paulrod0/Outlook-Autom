@@ -38,7 +38,7 @@ def run_ol_Script(outdest, filefmt, olreadfolder, oldprocessedfolder, gui_entry,
         sys.exit(f'No Folder {olreadfolder} found!!! Exiting.')
 
     procbox = _find_subfolder(outlook.Folders, oldprocessedfolder)
-    if procbox None:
+    if procbox is None:
         sys.exit(f'Folder {oldprocessedfolder} not found!!! Exiting.')
 
 
@@ -70,7 +70,7 @@ def run_ol_Script(outdest, filefmt, olreadfolder, oldprocessedfolder, gui_entry,
                     mail_counter += 1
                     msg.Move(procbox)
             
-         return 'Succesfully processed {} emails!'.format(mail_counter) if mail_counter > 0 else 'No emails processed'
+        return 'Succesfully processed {} emails!'.format(mail_counter) if mail_counter > 0 else 'No emails processed'
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -95,6 +95,7 @@ if __name__ == "__main__":
 
 
     run_ol_Script(args.outdest, args.olfiletype, args.olfolder, args.olprocfolder, False, proc)
+    
 
 
             

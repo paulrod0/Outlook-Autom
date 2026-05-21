@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DEFAULT_PANELS } from "@/lib/panelLayout";
 import { loadBuildingFor, runLayoutAndPvgis } from "@/lib/pipeline";
 import {
@@ -10,7 +10,7 @@ import {
   saveCurrentProject,
   type ProjectSnapshot,
 } from "@/lib/projects";
-import { setState, useProjectState } from "@/lib/store";
+import { getState, setState, useProjectState } from "@/lib/store";
 
 export function ProjectPanel() {
   const s = useProjectState();
@@ -145,6 +145,8 @@ export function ProjectPanel() {
         />
       </Section>
 
+      <BillSection bill={s.bill} pvgisYield={s.pvgis?.specificYield} />
+
       <SavedProjectsSection canSave={!!s.parcelGeometry} />
 
       <button
@@ -161,6 +163,123 @@ export function ProjectPanel() {
         Guarda y descarga la oferta cuando los números cuadren.
       </footer>
     </aside>
+  );
+}
+
+function BillSection({
+  bill,
+  pvgisYield,
+}: {
+  bill: ReturnType<typeof useProjectState>["bill"];
+  pvgisYield: number | undefined;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const onPick = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/bill/parse", { method: "POST", body: fd });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(j.error ?? "Error parseando factura");
+      }
+      const data = (await res.json()) as NonNullable<
+        ReturnType<typeof useProjectState>["bill"]
+      >;
+      setState({
+        bill: data,
+        // Si la factura trae dirección y aún no hay parcela, la prerellenamos.
+        address: getState().address ?? data.supplyAddress ?? null,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error subiendo factura");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Potencia recomendada por consumo:
+  //   kWp = consumo_anual / produccion_especifica (kWh/kWp·año)
+  // Usamos el yield de PVGIS si lo tenemos, si no 1500 (España media).
+  const yieldKwhKwp = pvgisYield && pvgisYield > 0 ? pvgisYield : 1500;
+  const recommendedKwp =
+    bill?.estimatedAnnualKwh && bill.estimatedAnnualKwh > 0
+      ? bill.estimatedAnnualKwh / yieldKwhKwp
+      : undefined;
+
+  return (
+    <Section title="Factura del cliente">
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void onPick(f);
+          e.target.value = "";
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        disabled={busy}
+        className="w-full rounded-md bg-zeus-panel/95 px-3 py-2 text-xs font-medium text-slate-200 ring-1 ring-white/10 hover:bg-zeus-panel disabled:opacity-40"
+      >
+        {busy ? "Procesando…" : bill ? "Subir otra factura" : "Subir factura (PDF)"}
+      </button>
+      {error && (
+        <p className="rounded-md bg-rose-500/15 px-2 py-1.5 text-[11px] text-rose-300">
+          {error}
+        </p>
+      )}
+      {bill && (
+        <div className="space-y-1.5">
+          {bill.cups && <Metric label="CUPS" value={bill.cups} />}
+          {bill.tariff && <Metric label="Tarifa" value={bill.tariff} />}
+          {bill.contractedPowerKw && bill.contractedPowerKw.length > 0 && (
+            <Metric
+              label="Potencia contratada"
+              value={bill.contractedPowerKw.map((p) => p.toString()).join(" / ")}
+              unit="kW"
+            />
+          )}
+          {bill.periodConsumptionKwh !== undefined && (
+            <Metric
+              label="Consumo periodo"
+              value={fmt(bill.periodConsumptionKwh, 0)}
+              unit="kWh"
+            />
+          )}
+          {bill.estimatedAnnualKwh !== undefined && (
+            <Metric
+              label="Consumo anual est."
+              value={fmt(bill.estimatedAnnualKwh, 0)}
+              unit="kWh"
+            />
+          )}
+          {recommendedKwp !== undefined && (
+            <Metric
+              label="kWp recomendado"
+              value={fmt(recommendedKwp, 1)}
+              unit="kWp"
+            />
+          )}
+          {bill.totalEur !== undefined && (
+            <Metric
+              label="Importe factura"
+              value={fmt(bill.totalEur, 2)}
+              unit="€"
+            />
+          )}
+        </div>
+      )}
+    </Section>
   );
 }
 

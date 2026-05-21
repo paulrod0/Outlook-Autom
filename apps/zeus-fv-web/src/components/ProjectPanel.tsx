@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_PANELS } from "@/lib/panelLayout";
+import { estimateCost, estimateProfitability } from "@/lib/economics";
 import { loadBuildingFor, runLayoutAndPvgis } from "@/lib/pipeline";
 import {
   deleteProject,
@@ -147,6 +148,12 @@ export function ProjectPanel() {
 
       <BillSection bill={s.bill} pvgisYield={s.pvgis?.specificYield} />
 
+      <EconomicsSection
+        peakPowerKwp={s.layout?.peakPowerKwp ?? 0}
+        yearlyKwh={s.pvgis?.yearlyKwh ?? 0}
+        bill={s.bill}
+      />
+
       <SavedProjectsSection canSave={!!s.parcelGeometry} />
 
       <button
@@ -280,6 +287,104 @@ function BillSection({
         </div>
       )}
     </Section>
+  );
+}
+
+function EconomicsSection({
+  peakPowerKwp,
+  yearlyKwh,
+  bill,
+}: {
+  peakPowerKwp: number;
+  yearlyKwh: number;
+  bill: ReturnType<typeof useProjectState>["bill"];
+}) {
+  const cost = useMemo(() => estimateCost(peakPowerKwp), [peakPowerKwp]);
+  const profitability = useMemo(
+    () => (cost ? estimateProfitability(yearlyKwh, cost, bill) : null),
+    [cost, yearlyKwh, bill],
+  );
+
+  if (!cost) return null;
+
+  return (
+    <Section title="Económico (orientativo)">
+      <Range
+        label="Inversión total"
+        low={cost.totalLow}
+        high={cost.totalHigh}
+        unit="€"
+      />
+      {profitability && (
+        <>
+          <Range
+            label="Ahorro anual"
+            low={profitability.annualSavingsLow}
+            high={profitability.annualSavingsHigh}
+            unit="€/año"
+          />
+          <Range
+            label="Payback"
+            low={profitability.paybackYearsLow}
+            high={profitability.paybackYearsHigh}
+            unit="años"
+            digits={1}
+          />
+          <p className="rounded-md bg-slate-800/50 px-2 py-1.5 text-[10px] leading-tight text-slate-400">
+            Tarifa eléctrica usada: {fmt(profitability.tariffEurPerKwh, 3)}{" "}
+            €/kWh ({profitability.tariffSource === "factura"
+              ? "deducida de la factura"
+              : "estimada"}
+            ). Asume 80 % autoconsumo y 20 % compensado a media tarifa.
+          </p>
+        </>
+      )}
+      <details className="rounded-md bg-slate-800/40 p-2 text-[11px] text-slate-300">
+        <summary className="cursor-pointer text-slate-400">
+          Desglose de costes
+        </summary>
+        <ul className="mt-1 space-y-0.5">
+          <li className="flex justify-between">
+            <span>Instalación FV</span>
+            <span>
+              {fmt(cost.installationLow, 0)} – {fmt(cost.installationHigh, 0)} €
+            </span>
+          </li>
+          {cost.overheads.map((o) => (
+            <li key={o.label} className="flex justify-between">
+              <span>{o.label}</span>
+              <span>
+                {fmt(o.low, 0)} – {fmt(o.high, 0)} €
+              </span>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </Section>
+  );
+}
+
+function Range({
+  label,
+  low,
+  high,
+  unit,
+  digits = 0,
+}: {
+  label: string;
+  low: number;
+  high: number;
+  unit?: string;
+  digits?: number;
+}) {
+  return (
+    <div className="flex items-baseline justify-between border-b border-white/5 pb-1.5">
+      <span className="text-xs text-slate-400">{label}</span>
+      <span className="text-sm font-medium text-slate-100">
+        {fmt(low, digits)} – {fmt(high, digits)}
+        {unit ? <span className="ml-1 text-xs text-slate-400">{unit}</span> : null}
+      </span>
+    </div>
   );
 }
 

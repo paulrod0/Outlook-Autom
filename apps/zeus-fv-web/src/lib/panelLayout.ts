@@ -45,6 +45,7 @@ export type LayoutResult = {
   panels: GeoJSON.Feature<GeoJSON.Polygon>[];
   usableAreaM2: number;
   rowSpacingM: number;
+  gridRotationDeg: number; // rotación aplicada al grid (0 = E-W)
 };
 
 export const DEFAULT_PANELS: PanelModel[] = [
@@ -111,7 +112,7 @@ function computeRowSpacing(latitudeDeg: number, panelHeightM: number, tiltDeg: n
 }
 
 export function computeLayout(input: LayoutInput): LayoutResult {
-  const { polygon, panel, tiltDeg, azimuthDeg, edgeMarginM, maxKwp } = input;
+  const { polygon, panel, tiltDeg, edgeMarginM, maxKwp } = input;
 
   // 1) Centroide y elección de zona UTM para trabajar en metros.
   const centroidFeature = turf.centroid(turf.feature(polygon));
@@ -134,7 +135,7 @@ export function computeLayout(input: LayoutInput): LayoutResult {
   const usableAreaM2 = turf.area(buffered);
   if (usableAreaM2 <= 0) return emptyResult();
 
-  // 3) Reproyectar polígono útil a UTM para generar el grid en metros.
+  // 3) Reproyectar polígono útil a UTM.
   const usableUtm = reprojectPolygon(usableLngLat, "EPSG:4326", utm);
 
   // 4) Separación entre filas (regla solsticio invierno) en metros.
@@ -143,42 +144,58 @@ export function computeLayout(input: LayoutInput): LayoutResult {
       ? input.rowSpacingM
       : computeRowSpacing(latC, panel.heightM, tiltDeg);
 
-  // 5) Generar grid alineado con el azimut. 180 = paneles al sur.
-  const rotationDeg = azimuthDeg - 180;
-  const theta = deg2rad(rotationDeg);
-  const cos = Math.cos(theta);
-  const sin = Math.sin(theta);
-
-  const [minX, minY, maxX, maxY] = bboxOfUtmGeom(usableUtm);
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const diag = Math.hypot(maxX - minX, maxY - minY);
-  const halfSpan = diag; // sobredimensionar para cubrir tras rotar
-
   const stepX = panel.widthM;
   const stepY = rowSpacing;
 
-  const panelsUtm: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
-  for (let v = -halfSpan; v <= halfSpan; v += stepY) {
-    for (let u = -halfSpan; u <= halfSpan; u += stepX) {
-      const rect = panelRectangleAt(
-        u,
-        v,
-        panel.widthM,
-        panel.heightM,
-        cos,
-        sin,
-        cx,
-        cy,
-      );
-      if (allCornersInside(rect, usableUtm)) {
-        panelsUtm.push(turf.polygon([rect]));
+  // 5) Centro fijo en UTM sobre el que rotamos el grid.
+  const [utmMinX, utmMinY, utmMaxX, utmMaxY] = bboxOfUtmGeom(usableUtm);
+  const cx = (utmMinX + utmMaxX) / 2;
+  const cy = (utmMinY + utmMaxY) / 2;
+
+  // 6) Búsqueda: probar rotaciones cada 5° en [0°, 90°) (más allá repite),
+  //    y para cada rotación varios offsets pequeños. Nos quedamos con la
+  //    combinación que coloque más paneles.
+  const rotationCandidates: number[] = [];
+  for (let a = 0; a < 90; a += 5) rotationCandidates.push(a);
+
+  let bestPanels: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
+  let bestRotation = 0;
+
+  for (const rotationDeg of rotationCandidates) {
+    const theta = deg2rad(rotationDeg);
+    const cos = Math.cos(theta);
+    const sin = Math.sin(theta);
+
+    // Bounding box del polígono expresado en el frame local del grid
+    // (rotado -theta respecto a UTM, con origen en (cx,cy)). Acota el barrido.
+    const [umin, vmin, umax, vmax] = bboxInLocalFrame(usableUtm, cx, cy, theta);
+
+    for (let dy = 0; dy < stepY; dy += stepY / 3) {
+      for (let dx = 0; dx < stepX; dx += stepX / 2) {
+        const panels = generateGrid(
+          usableUtm,
+          panel,
+          umin + dx,
+          vmin + dy,
+          umax,
+          vmax,
+          stepX,
+          stepY,
+          cos,
+          sin,
+          cx,
+          cy,
+        );
+        if (panels.length > bestPanels.length) {
+          bestPanels = panels;
+          bestRotation = rotationDeg;
+        }
       }
     }
   }
 
-  // 6) Reproyectar paneles UTM → lon/lat para el render.
-  const panelsLngLat = panelsUtm.map((f) =>
+  // 7) Reproyectar paneles UTM → lon/lat para el render.
+  const panelsLngLat = bestPanels.map((f) =>
     reprojectFeature(f, utm, "EPSG:4326"),
   );
 
@@ -196,7 +213,79 @@ export function computeLayout(input: LayoutInput): LayoutResult {
     panels: limited,
     usableAreaM2: Number(usableAreaM2.toFixed(1)),
     rowSpacingM: Number(rowSpacing.toFixed(2)),
+    gridRotationDeg: bestRotation,
   };
+}
+
+function generateGrid(
+  usableUtm: GeoJSON.Polygon | GeoJSON.MultiPolygon,
+  panel: PanelModel,
+  uStart: number,
+  vStart: number,
+  uEnd: number,
+  vEnd: number,
+  stepX: number,
+  stepY: number,
+  cos: number,
+  sin: number,
+  cx: number,
+  cy: number,
+): GeoJSON.Feature<GeoJSON.Polygon>[] {
+  const panels: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
+  for (let v = vStart; v <= vEnd; v += stepY) {
+    for (let u = uStart; u <= uEnd; u += stepX) {
+      const rect = panelRectangleAt(
+        u,
+        v,
+        panel.widthM,
+        panel.heightM,
+        cos,
+        sin,
+        cx,
+        cy,
+      );
+      if (allCornersInside(rect, usableUtm)) {
+        panels.push(turf.polygon([rect]));
+      }
+    }
+  }
+  return panels;
+}
+
+/**
+ * Devuelve el bbox del polígono expresado en un frame local: trasladado a
+ * (cx,cy) y rotado por -theta. Acota el barrido del grid en coords (u,v).
+ */
+function bboxInLocalFrame(
+  g: GeoJSON.Polygon | GeoJSON.MultiPolygon,
+  cx: number,
+  cy: number,
+  theta: number,
+): [number, number, number, number] {
+  // local = R(-theta) · (utm - (cx,cy))
+  // R(-theta) = [[cos, sin], [-sin, cos]]
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  let umin = Infinity,
+    vmin = Infinity,
+    umax = -Infinity,
+    vmax = -Infinity;
+  const polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
+  for (const poly of polys) {
+    for (const ring of poly) {
+      for (const [x, y] of ring) {
+        const dx = x - cx;
+        const dy = y - cy;
+        const u = dx * cos + dy * sin;
+        const v = -dx * sin + dy * cos;
+        if (u < umin) umin = u;
+        if (v < vmin) vmin = v;
+        if (u > umax) umax = u;
+        if (v > vmax) vmax = v;
+      }
+    }
+  }
+  return [umin, vmin, umax, vmax];
 }
 
 function bboxOfUtmGeom(
@@ -264,6 +353,7 @@ function emptyResult(): LayoutResult {
     panels: [],
     usableAreaM2: 0,
     rowSpacingM: 0,
+    gridRotationDeg: 0,
   };
 }
 

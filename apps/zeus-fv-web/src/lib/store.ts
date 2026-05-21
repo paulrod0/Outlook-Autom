@@ -10,6 +10,8 @@ export type ProjectState = {
   centroid: { lat: number; lon: number } | null;
   parcelAreaM2: number | null;
   parcelGeometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
+  // Huella del edificio según WFS BU de Catastro (puede ser null si no hay).
+  buildingGeometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
   panel: PanelModel;
   tiltDeg: number;
   azimuthDeg: number;
@@ -32,6 +34,7 @@ const initialState: ProjectState = {
   centroid: null,
   parcelAreaM2: null,
   parcelGeometry: null,
+  buildingGeometry: null,
   panel: DEFAULT_PANELS[0],
   tiltDeg: 15,
   azimuthDeg: 180,

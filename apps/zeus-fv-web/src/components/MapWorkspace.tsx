@@ -6,7 +6,7 @@ import { AddressSearch } from "./AddressSearch";
 import { HoleDrawer } from "./HoleDrawer";
 import { PolygonEditor } from "./PolygonEditor";
 import type { GeocodeResult } from "@/lib/geocoding";
-import { runFromPoint, runLayoutAndPvgis } from "@/lib/pipeline";
+import { clipParcelToBuilding, runFromPoint, runLayoutAndPvgis } from "@/lib/pipeline";
 import {
   addExclusionHole,
   clearExclusionHoles,
@@ -18,6 +18,7 @@ const DEFAULT_CENTER: [number, number] = [-3.7038, 40.4168];
 const DEFAULT_ZOOM = 5.5;
 
 const PARCEL_SOURCE = "zeus-parcel";
+const BUILDING_SOURCE = "zeus-building";
 const PANELS_SOURCE = "zeus-panels";
 
 export function MapWorkspace() {
@@ -88,6 +89,21 @@ export function MapWorkspace() {
         paint: {
           "line-color": "#22c55e",
           "line-width": 2,
+        },
+      });
+
+      map.addSource(BUILDING_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "building-line",
+        type: "line",
+        source: BUILDING_SOURCE,
+        paint: {
+          "line-color": "#facc15",
+          "line-width": 2,
+          "line-dasharray": [2, 2],
         },
       });
 
@@ -222,6 +238,27 @@ export function MapWorkspace() {
     });
   }, [project.layout, ready]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const src = map.getSource(BUILDING_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    src.setData(
+      project.buildingGeometry
+        ? {
+            type: "FeatureCollection",
+            features: [
+              {
+                type: "Feature",
+                geometry: project.buildingGeometry,
+                properties: {},
+              },
+            ],
+          }
+        : { type: "FeatureCollection", features: [] },
+    );
+  }, [project.buildingGeometry, ready]);
+
   const onPick = (result: GeocodeResult) => {
     const map = mapRef.current;
     if (!map) return;
@@ -246,6 +283,20 @@ export function MapWorkspace() {
       </div>
       {canEdit && (
         <div className="absolute right-4 top-4 z-10 flex w-52 flex-col gap-2">
+          {project.buildingGeometry && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditMode(false);
+                setDrawMode(false);
+                clipParcelToBuilding();
+              }}
+              className="rounded-md bg-amber-400/90 px-3 py-1.5 text-xs font-medium text-slate-900 shadow ring-1 ring-white/10 hover:bg-amber-400"
+              title="Sustituye el polígono por la huella del edificio según Catastro BU"
+            >
+              Recortar al edificio
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {

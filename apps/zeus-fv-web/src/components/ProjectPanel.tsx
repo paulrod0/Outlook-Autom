@@ -3,6 +3,13 @@
 import { useEffect, useState } from "react";
 import { DEFAULT_PANELS } from "@/lib/panelLayout";
 import { runLayoutAndPvgis } from "@/lib/pipeline";
+import {
+  deleteProject,
+  listProjects,
+  loadProject,
+  saveCurrentProject,
+  type ProjectSnapshot,
+} from "@/lib/projects";
 import { setState, useProjectState } from "@/lib/store";
 
 export function ProjectPanel() {
@@ -137,6 +144,8 @@ export function ProjectPanel() {
         />
       </Section>
 
+      <SavedProjectsSection canSave={!!s.parcelGeometry} />
+
       <button
         type="button"
         onClick={() => void downloadOffer()}
@@ -147,10 +156,85 @@ export function ProjectPanel() {
       </button>
 
       <footer className="mt-auto rounded-md bg-slate-800/60 p-3 text-[11px] leading-relaxed text-slate-400">
-        Click sobre la cubierta · Editar polígono para afinar la zona útil ·
-        Descarga la oferta cuando los números cuadren.
+        Click sobre la cubierta · Editar polígono o añadir zonas de exclusión ·
+        Guarda y descarga la oferta cuando los números cuadren.
       </footer>
     </aside>
+  );
+}
+
+function SavedProjectsSection({ canSave }: { canSave: boolean }) {
+  const [items, setItems] = useState<ProjectSnapshot[]>([]);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (open) setItems(listProjects());
+  }, [open]);
+
+  const refresh = () => setItems(listProjects());
+
+  return (
+    <Section title={`Mis proyectos (${items.length || "—"})`}>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={!canSave}
+          onClick={() => {
+            saveCurrentProject();
+            setOpen(true);
+            refresh();
+          }}
+          className="flex-1 rounded-md bg-zeus-panel/95 px-2 py-1.5 text-xs font-medium text-slate-200 ring-1 ring-white/10 hover:bg-zeus-panel disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Guardar
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex-1 rounded-md bg-zeus-panel/95 px-2 py-1.5 text-xs font-medium text-slate-200 ring-1 ring-white/10 hover:bg-zeus-panel"
+        >
+          {open ? "Ocultar lista" : "Ver lista"}
+        </button>
+      </div>
+      {open && items.length > 0 && (
+        <ul className="max-h-40 space-y-1 overflow-auto rounded-md ring-1 ring-white/5">
+          {items.map((p) => (
+            <li
+              key={p.id}
+              className="flex items-center justify-between gap-2 bg-slate-800/60 px-2 py-1.5 text-xs text-slate-200"
+            >
+              <button
+                type="button"
+                onClick={() => loadProject(p.id)}
+                className="flex-1 truncate text-left hover:text-zeus-green"
+                title={`Guardado ${new Date(p.savedAt).toLocaleString("es-ES")}`}
+              >
+                {p.name}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteProject(p.id);
+                  refresh();
+                }}
+                className="text-rose-400 hover:text-rose-300"
+                aria-label="Eliminar"
+                title="Eliminar"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && items.length === 0 && (
+        <p className="rounded-md bg-slate-800/30 px-2 py-2 text-[11px] text-slate-400">
+          Aún no hay proyectos guardados. Los proyectos se almacenan en este
+          navegador (localStorage); la sincronización con Supabase llegará en
+          cuanto se provisione el proyecto.
+        </p>
+      )}
+    </Section>
   );
 }
 

@@ -10,6 +10,7 @@ import {
   View,
   pdf,
 } from "@react-pdf/renderer";
+import { estimateCost, estimateProfitability } from "./economics";
 import type { ProjectState } from "./store";
 
 /**
@@ -137,7 +138,112 @@ const styles = StyleSheet.create({
     borderTopColor: COLORS.border,
     paddingTop: 6,
   },
+
+  econRow: {
+    marginTop: 12,
+    flexDirection: "row",
+    gap: 12,
+  },
+  econCard: {
+    flex: 1,
+    backgroundColor: COLORS.panel,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 4,
+    padding: 12,
+  },
+  econLabel: {
+    color: COLORS.textDim,
+    fontSize: 9,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  econValue: { color: COLORS.green, fontSize: 14, fontWeight: "bold" },
+  econUnit: { color: COLORS.textDim, fontSize: 9, marginTop: 2 },
+  econDetail: {
+    marginTop: 10,
+    backgroundColor: COLORS.panel,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 4,
+    padding: 10,
+  },
+  econDetailTitle: {
+    color: COLORS.green,
+    fontSize: 9,
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  disclaimer: {
+    marginTop: 10,
+    fontSize: 8,
+    fontStyle: "italic",
+    color: COLORS.textDim,
+  },
 });
+
+function EconomicsBlock({ project }: { project: ProjectState }) {
+  const kwp = project.layout?.peakPowerKwp ?? 0;
+  const yearlyKwh = project.pvgis?.yearlyKwh ?? 0;
+  if (kwp <= 0 || yearlyKwh <= 0) return null;
+
+  const cost = estimateCost(kwp);
+  if (!cost) return null;
+  const prof = estimateProfitability(yearlyKwh, cost, project.bill);
+
+  return (
+    <View>
+      <View style={styles.econRow}>
+        <View style={styles.econCard}>
+          <Text style={styles.econLabel}>Inversión total</Text>
+          <Text style={styles.econValue}>
+            {fmt(cost.totalLow, 0)} – {fmt(cost.totalHigh, 0)}
+          </Text>
+          <Text style={styles.econUnit}>€</Text>
+        </View>
+        {prof && (
+          <>
+            <View style={styles.econCard}>
+              <Text style={styles.econLabel}>Ahorro anual</Text>
+              <Text style={styles.econValue}>
+                {fmt(prof.annualSavingsLow, 0)} – {fmt(prof.annualSavingsHigh, 0)}
+              </Text>
+              <Text style={styles.econUnit}>€/año</Text>
+            </View>
+            <View style={styles.econCard}>
+              <Text style={styles.econLabel}>Payback</Text>
+              <Text style={styles.econValue}>
+                {prof.paybackYearsLow} – {prof.paybackYearsHigh}
+              </Text>
+              <Text style={styles.econUnit}>años</Text>
+            </View>
+          </>
+        )}
+      </View>
+
+      <View style={styles.econDetail}>
+        <Text style={styles.econDetailTitle}>Desglose de costes</Text>
+        <View style={styles.row}>
+          <Text style={styles.rowLabel}>Instalación FV</Text>
+          <Text style={styles.rowValue}>
+            {fmt(cost.installationLow, 0)} – {fmt(cost.installationHigh, 0)} €
+          </Text>
+        </View>
+        {cost.overheads.map((o) => (
+          <View key={o.label} style={styles.row}>
+            <Text style={styles.rowLabel}>{o.label}</Text>
+            <Text style={styles.rowValue}>
+              {fmt(o.low, 0)} – {fmt(o.high, 0)} €
+            </Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
 
 function fmt(n: number | null | undefined, digits = 0): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "—";
@@ -285,6 +391,12 @@ export function OfferDocument({
             <Text style={styles.totalUnit}>kWh/kWp·año</Text>
           </View>
         </View>
+
+        <EconomicsBlock project={project} />
+        <Text style={styles.disclaimer}>
+          Estimaciones orientativas. La oferta vinculante requiere visita
+          técnica y validación con la tabla de costes interna.
+        </Text>
 
         <View style={styles.footer} fixed>
           <Text>

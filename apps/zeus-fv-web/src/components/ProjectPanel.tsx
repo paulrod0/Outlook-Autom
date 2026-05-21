@@ -21,7 +21,7 @@ export function ProjectPanel() {
       void runLayoutAndPvgis();
     }, 300);
     return () => clearTimeout(id);
-  }, [s.panel, s.tiltDeg, s.azimuthDeg, s.edgeMarginM, s.parcelGeometry]);
+  }, [s.panel, s.tiltDeg, s.azimuthDeg, s.edgeMarginM, s.ceLimit, s.parcelGeometry]);
 
   return (
     <aside className="flex h-full flex-col gap-4 overflow-y-auto border-l border-white/10 bg-zeus-panel p-5">
@@ -112,6 +112,15 @@ export function ProjectPanel() {
           step={0.1}
           onChange={(edgeMarginM) => setState({ edgeMarginM })}
         />
+        <label className="flex cursor-pointer items-center gap-2 rounded-md border border-white/5 bg-slate-800/60 px-2 py-1.5 text-xs text-slate-200">
+          <input
+            type="checkbox"
+            checked={s.ceLimit}
+            onChange={(e) => setState({ ceLimit: e.target.checked })}
+            className="accent-zeus-green"
+          />
+          <span>Comunidad Energética (límite 130 kWp/refcat)</span>
+        </label>
       </Section>
 
       <Section title="Resultados">
@@ -128,11 +137,42 @@ export function ProjectPanel() {
         />
       </Section>
 
+      <button
+        type="button"
+        onClick={() => void downloadOffer()}
+        disabled={!s.layout || !s.pvgis}
+        className="rounded-md bg-zeus-green/90 px-3 py-2 text-sm font-medium text-slate-900 hover:bg-zeus-green disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Descargar oferta (PDF)
+      </button>
+
       <footer className="mt-auto rounded-md bg-slate-800/60 p-3 text-[11px] leading-relaxed text-slate-400">
-        MVP (M1+M2+M3). Click sobre la cubierta para empezar.
+        Click sobre la cubierta · Editar polígono para afinar la zona útil ·
+        Descarga la oferta cuando los números cuadren.
       </footer>
     </aside>
   );
+}
+
+async function downloadOffer() {
+  const { generateOfferBlob } = await import("@/lib/offerPdf");
+  const project = (await import("@/lib/store")).getState();
+
+  // Captura el canvas del mapa si existe.
+  const canvas = document.querySelector(
+    ".maplibregl-canvas",
+  ) as HTMLCanvasElement | null;
+  const mapImage = canvas ? canvas.toDataURL("image/png") : undefined;
+
+  const blob = await generateOfferBlob(project, mapImage);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `oferta-zeus-${project.reference ?? "fv"}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function loadByRef(ref: string) {

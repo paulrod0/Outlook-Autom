@@ -14,6 +14,7 @@ export type ProjectState = {
   tiltDeg: number;
   azimuthDeg: number;
   edgeMarginM: number;
+  ceLimit: boolean; // si true, aplica el máx 130 kWp por refcat (Fase 1)
   layout: LayoutResult | null;
   pvgis: {
     yearlyKwh: number;
@@ -35,6 +36,7 @@ const initialState: ProjectState = {
   tiltDeg: 15,
   azimuthDeg: 180,
   edgeMarginM: 0.5,
+  ceLimit: false,
   layout: null,
   pvgis: null,
   status: "idle",

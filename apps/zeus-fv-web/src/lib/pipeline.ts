@@ -64,6 +64,7 @@ export async function runLayoutAndPvgis() {
     tiltDeg: s.tiltDeg,
     azimuthDeg: s.azimuthDeg,
     edgeMarginM: s.edgeMarginM,
+    maxKwp: s.ceLimit ? 130 : undefined,
   });
 
   setState({ layout });

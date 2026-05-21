@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
 import { AddressSearch } from "./AddressSearch";
+import { PolygonEditor } from "./PolygonEditor";
 import type { GeocodeResult } from "@/lib/geocoding";
-import { runFromPoint } from "@/lib/pipeline";
-import { useProjectState } from "@/lib/store";
+import { runFromPoint, runLayoutAndPvgis } from "@/lib/pipeline";
+import { setState, useProjectState } from "@/lib/store";
 
 const DEFAULT_CENTER: [number, number] = [-3.7038, 40.4168];
 const DEFAULT_ZOOM = 5.5;
@@ -17,7 +18,10 @@ export function MapWorkspace() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
+  const editorRef = useRef<PolygonEditor | null>(null);
+  const editModeRef = useRef(false);
   const [ready, setReady] = useState(false);
+  const [editMode, setEditMode] = useState(false);
   const project = useProjectState();
 
   useEffect(() => {
@@ -25,6 +29,7 @@ export function MapWorkspace() {
 
     const map = new maplibregl.Map({
       container: containerRef.current,
+      preserveDrawingBuffer: true, // permite map.getCanvas().toDataURL() para el PDF
       style: {
         version: 8,
         sources: {
@@ -100,6 +105,8 @@ export function MapWorkspace() {
     });
 
     map.on("click", (e) => {
+      // En modo edición, los clicks los gestionan los handles del editor.
+      if (editModeRef.current) return;
       const { lat, lng } = e.lngLat;
       if (markerRef.current) markerRef.current.remove();
       markerRef.current = new maplibregl.Marker({ color: "#22c55e" })
@@ -111,10 +118,31 @@ export function MapWorkspace() {
     mapRef.current = map;
 
     return () => {
+      editorRef.current?.destroy();
+      editorRef.current = null;
       map.remove();
       mapRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    editModeRef.current = editMode;
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    if (editMode) {
+      if (!editorRef.current) {
+        editorRef.current = new PolygonEditor(map, (polygon) => {
+          setState({ parcelGeometry: polygon });
+          void runLayoutAndPvgis();
+        });
+      }
+      editorRef.current.setPolygon(project.parcelGeometry);
+    } else {
+      editorRef.current?.destroy();
+      editorRef.current = null;
+    }
+  }, [editMode, ready, project.parcelGeometry]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -160,15 +188,34 @@ export function MapWorkspace() {
     map.flyTo({ center, zoom: 19, speed: 1.4 });
   };
 
+  const canEdit = !!project.parcelGeometry;
+
   return (
     <section className="relative">
       <div ref={containerRef} className="absolute inset-0" />
       <div className="absolute left-4 top-4 z-10 w-[420px] max-w-[calc(100%-2rem)]">
         <AddressSearch disabled={!ready} onPick={onPick} />
         <p className="mt-2 rounded-md bg-zeus-panel/90 px-3 py-1.5 text-[11px] text-slate-300 shadow ring-1 ring-white/5">
-          Haz clic sobre una cubierta para cargar la parcela catastral.
+          {editMode
+            ? "Arrastra los puntos verdes · Doble click para borrar · Click en un punto pequeño para añadir."
+            : "Haz clic sobre una cubierta para cargar la parcela catastral."}
         </p>
       </div>
+      {canEdit && (
+        <div className="absolute right-4 top-4 z-10 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => setEditMode((v) => !v)}
+            className={`rounded-md px-3 py-1.5 text-xs font-medium shadow ring-1 ring-white/10 ${
+              editMode
+                ? "bg-amber-500 text-slate-900 hover:bg-amber-400"
+                : "bg-zeus-panel/95 text-slate-200 hover:bg-zeus-panel"
+            }`}
+          >
+            {editMode ? "Terminar edición" : "Editar polígono"}
+          </button>
+        </div>
+      )}
       {project.status !== "idle" && (
         <div className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-md bg-zeus-panel/95 px-4 py-2 text-xs text-slate-200 shadow ring-1 ring-white/10">
           <StatusBadge status={project.status} error={project.error} />

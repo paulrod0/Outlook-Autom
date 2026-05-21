@@ -22,6 +22,7 @@ const OVC_COORDENADAS =
   "https://ovc.catastro.meh.es/ovcservweb/OVCSWLocalizacionRC/OVCCoordenadas.asmx/Consulta_RCCOOR";
 
 const WFS_INSPIRE = "https://ovc.catastro.meh.es/INSPIRE/wfsCP.aspx";
+const WFS_INSPIRE_BU = "https://ovc.catastro.meh.es/INSPIRE/wfsBU.aspx";
 
 export type CadastralParcel = {
   reference: string;
@@ -29,6 +30,12 @@ export type CadastralParcel = {
   areaM2?: number;
   polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon;
   source: "catastro-wfs";
+};
+
+export type CadastralBuilding = {
+  reference: string;
+  polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+  source: "catastro-wfs-bu";
 };
 
 const parser = new XMLParser({
@@ -110,6 +117,78 @@ export async function parcelByRef(
     polygon,
     source: "catastro-wfs",
   };
+}
+
+export async function buildingByRef(
+  reference: string,
+): Promise<CadastralBuilding | null> {
+  const clean = reference.replace(/\s+/g, "").toUpperCase();
+  if (!/^[0-9A-Z]{14,20}$/.test(clean)) {
+    throw new Error("Referencia catastral no válida (esperado 14-20 caracteres)");
+  }
+  const refParcel = clean.slice(0, 14);
+
+  const url = new URL(WFS_INSPIRE_BU);
+  url.searchParams.set("service", "WFS");
+  url.searchParams.set("version", "2.0.0");
+  url.searchParams.set("request", "GetFeature");
+  url.searchParams.set("STOREDQUERIE_ID", "GetBuildingByParcel");
+  url.searchParams.set("srsname", "EPSG:4326");
+  url.searchParams.set("refcat", refParcel);
+
+  const res = await fetch(url, {
+    headers: { "User-Agent": USER_AGENT, Accept: "application/xml" },
+  });
+  if (!res.ok) return null;
+
+  const xml = await res.text();
+  const doc = parser.parse(xml) as BuildingFeatureCollectionDoc;
+
+  // El WFS BU envuelve cada edificio en <gml:featureMember>, distinto de
+  // <wfs:member> del WFS CP. Tras quitar prefijos: featureMember.Building.
+  const members = ensureArray(doc?.FeatureCollection?.featureMember);
+  const buildings: BuildingNode[] = [];
+  for (const m of members) {
+    if (m?.Building) buildings.push(m.Building);
+  }
+  if (buildings.length === 0) return null;
+
+  const polygons: GeoJSON.Position[][][] = [];
+
+  for (const b of buildings) {
+    // Path real del WFS BU:
+    //   Building > geometry > BuildingGeometry > geometry > Surface
+    //     > patches > PolygonPatch > exterior > LinearRing > posList
+    const surface = b?.geometry?.BuildingGeometry?.geometry?.Surface;
+    if (!surface) continue;
+
+    const patches = ensureArray(surface.patches?.PolygonPatch);
+    for (const patch of patches) {
+      const outer = posListToRing(patch.exterior?.LinearRing?.posList);
+      if (!outer) continue;
+      const rings: GeoJSON.Position[][] = [outer];
+      for (const interior of ensureArray(patch.interior)) {
+        const inner = posListToRing(interior.LinearRing?.posList);
+        if (inner) rings.push(inner);
+      }
+      polygons.push(rings);
+    }
+
+    // Algunos sitios urbanos antiguos emiten posList directo dentro de Surface.
+    if (patches.length === 0 && surface.posList) {
+      const ring = posListToRing(surface.posList);
+      if (ring) polygons.push([ring]);
+    }
+  }
+
+  if (polygons.length === 0) return null;
+
+  const polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon =
+    polygons.length === 1
+      ? { type: "Polygon", coordinates: polygons[0] }
+      : { type: "MultiPolygon", coordinates: polygons };
+
+  return { reference: refParcel, polygon, source: "catastro-wfs-bu" };
 }
 
 /**
@@ -244,3 +323,26 @@ type PolygonPatchNode = {
 };
 
 type InteriorNode = { LinearRing?: { posList?: PosListNode } };
+
+type BuildingFeatureCollectionDoc = {
+  FeatureCollection?: {
+    featureMember?: FeatureMemberNode | FeatureMemberNode[];
+  };
+};
+
+type FeatureMemberNode = {
+  Building?: BuildingNode;
+};
+
+type BuildingNode = {
+  geometry?: {
+    BuildingGeometry?: {
+      geometry?: {
+        Surface?: {
+          posList?: PosListNode;
+          patches?: { PolygonPatch?: PolygonPatchNode | PolygonPatchNode[] };
+        };
+      };
+    };
+  };
+};

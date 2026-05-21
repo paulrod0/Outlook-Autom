@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { DEFAULT_PANELS } from "@/lib/panelLayout";
-import { runLayoutAndPvgis } from "@/lib/pipeline";
+import { loadBuildingFor, runLayoutAndPvgis } from "@/lib/pipeline";
 import {
   deleteProject,
   listProjects,
@@ -280,9 +280,11 @@ async function loadByRef(ref: string) {
       reference: parcel.reference,
       parcelAreaM2: parcel.areaM2 ?? null,
       parcelGeometry: parcel.polygon,
+      buildingGeometry: null,
       centroid: { lon: centroid[0], lat: centroid[1] },
       status: "computing",
     });
+    void loadBuildingFor(parcel.reference);
     await runLayoutAndPvgis();
   } catch (err) {
     setState({

@@ -3,6 +3,18 @@
 import { useSyncExternalStore } from "react";
 import { DEFAULT_PANELS, type LayoutResult, type PanelModel } from "@/lib/panelLayout";
 
+export type BillSummary = {
+  cups?: string;
+  tariff?: string;
+  contractedPowerKw?: number[];
+  periodConsumptionKwh?: number;
+  periodStart?: string;
+  periodEnd?: string;
+  estimatedAnnualKwh?: number;
+  totalEur?: number;
+  supplyAddress?: string;
+};
+
 export type ProjectState = {
   clientName: string;
   reference: string | null;
@@ -17,6 +29,7 @@ export type ProjectState = {
   azimuthDeg: number;
   edgeMarginM: number;
   ceLimit: boolean; // si true, aplica el máx 130 kWp por refcat (Fase 1)
+  bill: BillSummary | null;
   layout: LayoutResult | null;
   pvgis: {
     yearlyKwh: number;
@@ -40,6 +53,7 @@ const initialState: ProjectState = {
   azimuthDeg: 180,
   edgeMarginM: 0.5,
   ceLimit: false,
+  bill: null,
   layout: null,
   pvgis: null,
   status: "idle",

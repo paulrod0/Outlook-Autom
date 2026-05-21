@@ -134,6 +134,7 @@ export function ProjectPanel() {
         <Metric label="Superficie parcela" value={fmt(s.parcelAreaM2)} unit="m²" />
         <Metric label="Superficie útil" value={fmt(s.layout?.usableAreaM2)} unit="m²" />
         <Metric label="Separación filas" value={fmt(s.layout?.rowSpacingM, 2)} unit="m" />
+        <Metric label="Rotación grid" value={fmt(s.layout?.gridRotationDeg, 0)} unit="°" />
         <Metric label="Nº paneles" value={fmt(s.layout?.panelCount, 0)} />
         <Metric label="Potencia pico" value={fmt(s.layout?.peakPowerKwp)} unit="kWp" />
         <Metric label="Producción anual" value={fmt(s.pvgis?.yearlyKwh, 0)} unit="kWh" />

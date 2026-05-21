@@ -3,10 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
 import { AddressSearch } from "./AddressSearch";
+import { HoleDrawer } from "./HoleDrawer";
 import { PolygonEditor } from "./PolygonEditor";
 import type { GeocodeResult } from "@/lib/geocoding";
 import { runFromPoint, runLayoutAndPvgis } from "@/lib/pipeline";
-import { setState, useProjectState } from "@/lib/store";
+import {
+  addExclusionHole,
+  clearExclusionHoles,
+  setState,
+  useProjectState,
+} from "@/lib/store";
 
 const DEFAULT_CENTER: [number, number] = [-3.7038, 40.4168];
 const DEFAULT_ZOOM = 5.5;
@@ -19,9 +25,13 @@ export function MapWorkspace() {
   const mapRef = useRef<MapLibreMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
   const editorRef = useRef<PolygonEditor | null>(null);
+  const drawerRef = useRef<HoleDrawer | null>(null);
   const editModeRef = useRef(false);
+  const drawModeRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [drawMode, setDrawMode] = useState(false);
+  const [drawPointCount, setDrawPointCount] = useState(0);
   const project = useProjectState();
 
   useEffect(() => {
@@ -105,8 +115,9 @@ export function MapWorkspace() {
     });
 
     map.on("click", (e) => {
-      // En modo edición, los clicks los gestionan los handles del editor.
-      if (editModeRef.current) return;
+      // Edición de polígono y dibujo de hole tienen prioridad sobre el
+      // click genérico de "cargar parcela".
+      if (editModeRef.current || drawModeRef.current) return;
       const { lat, lng } = e.lngLat;
       if (markerRef.current) markerRef.current.remove();
       markerRef.current = new maplibregl.Marker({ color: "#22c55e" })
@@ -120,6 +131,8 @@ export function MapWorkspace() {
     return () => {
       editorRef.current?.destroy();
       editorRef.current = null;
+      drawerRef.current?.destroy();
+      drawerRef.current = null;
       map.remove();
       mapRef.current = null;
     };
@@ -143,6 +156,34 @@ export function MapWorkspace() {
       editorRef.current = null;
     }
   }, [editMode, ready, project.parcelGeometry]);
+
+  useEffect(() => {
+    drawModeRef.current = drawMode;
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    if (drawMode) {
+      if (!drawerRef.current) {
+        drawerRef.current = new HoleDrawer(map, () => {
+          setDrawPointCount(drawerRef.current?.pointCount() ?? 0);
+        });
+      }
+      drawerRef.current.start();
+      setDrawPointCount(0);
+    } else {
+      drawerRef.current?.cancel();
+    }
+  }, [drawMode, ready]);
+
+  const finishHole = () => {
+    if (!drawerRef.current) return;
+    const ring = drawerRef.current.commit();
+    setDrawMode(false);
+    if (ring) {
+      addExclusionHole(ring);
+      void runLayoutAndPvgis();
+    }
+  };
 
   useEffect(() => {
     const map = mapRef.current;
@@ -196,17 +237,23 @@ export function MapWorkspace() {
       <div className="absolute left-4 top-4 z-10 w-[420px] max-w-[calc(100%-2rem)]">
         <AddressSearch disabled={!ready} onPick={onPick} />
         <p className="mt-2 rounded-md bg-zeus-panel/90 px-3 py-1.5 text-[11px] text-slate-300 shadow ring-1 ring-white/5">
-          {editMode
-            ? "Arrastra los puntos verdes · Doble click para borrar · Click en un punto pequeño para añadir."
-            : "Haz clic sobre una cubierta para cargar la parcela catastral."}
+          {drawMode
+            ? "Click sobre el mapa para añadir vértices a la zona de exclusión. Al terminar, pulsa Cerrar zona."
+            : editMode
+              ? "Arrastra los puntos verdes · Doble click para borrar · Click en un punto pequeño para añadir."
+              : "Haz clic sobre una cubierta para cargar la parcela catastral."}
         </p>
       </div>
       {canEdit && (
-        <div className="absolute right-4 top-4 z-10 flex flex-col gap-2">
+        <div className="absolute right-4 top-4 z-10 flex w-52 flex-col gap-2">
           <button
             type="button"
-            onClick={() => setEditMode((v) => !v)}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium shadow ring-1 ring-white/10 ${
+            onClick={() => {
+              setDrawMode(false);
+              setEditMode((v) => !v);
+            }}
+            disabled={drawMode}
+            className={`rounded-md px-3 py-1.5 text-xs font-medium shadow ring-1 ring-white/10 disabled:opacity-40 ${
               editMode
                 ? "bg-amber-500 text-slate-900 hover:bg-amber-400"
                 : "bg-zeus-panel/95 text-slate-200 hover:bg-zeus-panel"
@@ -214,6 +261,52 @@ export function MapWorkspace() {
           >
             {editMode ? "Terminar edición" : "Editar polígono"}
           </button>
+
+          {drawMode ? (
+            <>
+              <button
+                type="button"
+                onClick={finishHole}
+                disabled={drawPointCount < 3}
+                className="rounded-md bg-zeus-green/90 px-3 py-1.5 text-xs font-medium text-slate-900 shadow ring-1 ring-white/10 hover:bg-zeus-green disabled:opacity-40"
+              >
+                Cerrar zona ({drawPointCount} pts)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawMode(false)}
+                className="rounded-md bg-zeus-panel/95 px-3 py-1.5 text-xs font-medium text-slate-200 shadow ring-1 ring-white/10 hover:bg-zeus-panel"
+              >
+                Cancelar
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setEditMode(false);
+                setDrawMode(true);
+              }}
+              disabled={editMode}
+              className="rounded-md bg-zeus-panel/95 px-3 py-1.5 text-xs font-medium text-slate-200 shadow ring-1 ring-white/10 hover:bg-zeus-panel disabled:opacity-40"
+            >
+              Añadir zona de exclusión
+            </button>
+          )}
+
+          {project.parcelGeometry?.type === "Polygon" &&
+            project.parcelGeometry.coordinates.length > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  clearExclusionHoles();
+                  void runLayoutAndPvgis();
+                }}
+                className="rounded-md bg-rose-500/80 px-3 py-1.5 text-xs font-medium text-slate-900 shadow ring-1 ring-white/10 hover:bg-rose-500"
+              >
+                Borrar zonas de exclusión
+              </button>
+            )}
         </div>
       )}
       {project.status !== "idle" && (

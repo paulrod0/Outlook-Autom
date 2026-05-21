@@ -64,6 +64,30 @@ export function resetProject(): void {
   emit();
 }
 
+/**
+ * Añade un anillo de exclusión (hole) al polígono activo de la parcela.
+ * Sólo soportado para Polygon (no MultiPolygon).
+ */
+export function addExclusionHole(ring: GeoJSON.Position[]): void {
+  if (!state.parcelGeometry || state.parcelGeometry.type !== "Polygon") return;
+  if (ring.length < 4) return;
+  const next: GeoJSON.Polygon = {
+    type: "Polygon",
+    coordinates: [...state.parcelGeometry.coordinates, ring],
+  };
+  setState({ parcelGeometry: next });
+}
+
+export function clearExclusionHoles(): void {
+  if (!state.parcelGeometry || state.parcelGeometry.type !== "Polygon") return;
+  if (state.parcelGeometry.coordinates.length <= 1) return;
+  const next: GeoJSON.Polygon = {
+    type: "Polygon",
+    coordinates: [state.parcelGeometry.coordinates[0]],
+  };
+  setState({ parcelGeometry: next });
+}
+
 export function useProjectState(): ProjectState {
   return useSyncExternalStore(
     (cb) => {

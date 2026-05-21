@@ -2,24 +2,34 @@
 
 Aplicación web interna de Zeus Energía / Optimus Grupo para diseño y dimensionado de instalaciones fotovoltaicas. Ver `../../docs/ARQUITECTURA.md` para la visión completa.
 
-## Estado actual: M0 — Scaffold
+## Estado actual: MVP funcional (M0+M1+M2+M3)
 
-Lo que funciona hoy:
+Flujo end-to-end operativo:
 
-- Scaffold de Next.js 15 (App Router) + TypeScript + Tailwind.
-- Mapa satélite a pantalla completa con MapLibre GL + Esri World Imagery.
-- Buscador de direcciones (Nominatim, restringido a España).
-- Cliente de Supabase listo (faltan credenciales).
-- Stubs tipados para PVGIS, Catastro y algoritmo de empaquetado, listos para los siguientes hitos.
+1. El comercial busca una dirección o hace **click sobre la cubierta**.
+2. La app consulta **Catastro** (OVCCoordenadas → ref. catastral, INSPIRE WFS → polígono y superficie).
+3. Computa el **empaquetado de paneles** sobre el polígono útil:
+   - reproyecta a UTM ETRS89,
+   - aplica buffer de seguridad,
+   - separación entre filas según altura solar del solsticio de invierno,
+   - rota el grid al azimut elegido,
+   - filtra paneles cuyos 4 vértices estén dentro del polígono.
+4. Llama a **PVGIS v5.3** con la potencia pico resultante y muestra
+   producción anual y específica.
+5. Cambiar modelo de panel, tilt, azimut o margen recalcula en vivo
+   (debounce 300 ms).
+
+Validado end-to-end con el ejemplo Barceló Montecastillo (ref `5163125QA6656S`, parcela 22.848 m², densidad 153 Wp/m² — dentro del rango típico 100-180).
 
 ## Siguientes hitos
 
 | Hito | Contenido |
 |------|-----------|
-| M1   | Integración Catastro (polígono de parcela a partir de ref. o click) |
-| M2   | Algoritmo de empaquetado + render de paneles |
-| M3   | PVGIS + caché en Supabase |
-| M4   | Persistencia de proyectos y edición de polígono |
+| M4   | Persistencia de proyectos en Supabase, edición de polígono y zonas de exclusión |
+| M5   | Generador de oferta/infografía PDF en formato Zeus |
+| M6   | Parser de factura de luz |
+| M7   | Fase 1: Comunidad Energética + límite 130 kW catastral |
+| M9   | Integración SolarEdge Monitoring (post-venta) |
 
 ## Cómo arrancar en local
 
@@ -37,22 +47,32 @@ La app queda en http://localhost:3000.
 ```
 src/
 ├── app/
-│   ├── layout.tsx        # raíz Next.js
-│   ├── page.tsx          # pantalla principal
-│   └── globals.css
+│   ├── layout.tsx                       # raíz Next.js
+│   ├── page.tsx                         # pantalla principal
+│   ├── globals.css
+│   └── api/
+│       ├── catastro/by-point/route.ts   # GET ?lat&lon → parcela completa
+│       ├── catastro/by-ref/route.ts     # GET ?ref → parcela por refcat
+│       ├── pvgis/route.ts               # GET ?lat&lon&kwp&tilt&azimuth
+│       └── debug-layout/route.ts        # validación interna del pipeline
 ├── components/
-│   ├── MapWorkspace.tsx  # mapa MapLibre + Esri satélite
-│   ├── AddressSearch.tsx # autocompletado Nominatim
-│   └── ProjectPanel.tsx  # panel lateral derecho
+│   ├── MapWorkspace.tsx                 # MapLibre + render parcela y paneles
+│   ├── AddressSearch.tsx                # autocompletado Nominatim
+│   └── ProjectPanel.tsx                 # panel lateral reactivo
 └── lib/
-    ├── geocoding.ts      # cliente Nominatim
-    ├── supabase.ts       # cliente Supabase browser
-    ├── pvgis.ts          # cliente PVGIS v5.3 (listo para M3)
-    ├── catastro.ts       # cliente Catastro (stub, M1)
-    └── panelLayout.ts    # algoritmo de empaquetado (stub, M2)
+    ├── geocoding.ts                     # cliente Nominatim
+    ├── supabase.ts                      # cliente Supabase browser
+    ├── catastro.ts                      # OVCCoordenadas + INSPIRE WFS + GML parser
+    ├── pvgis.ts                         # cliente PVGIS v5.3 con Zod
+    ├── panelLayout.ts                   # empaquetado UTM + reproyección
+    ├── pipeline.ts                      # orquestación cliente del flujo
+    └── store.ts                         # state share con useSyncExternalStore
 ```
 
 ## Notas
 
-- En M1 las llamadas a Catastro y la geocodificación se moverán a Route Handlers para añadir caché y rate-limit.
+- Las llamadas a Catastro y PVGIS pasan por Route Handlers para añadir
+  User-Agent (Catastro lo exige), evitar CORS y permitir caché.
 - `tsconfig.json` activa `strict`. `npm run typecheck` valida el árbol completo.
+- El polígono catastral devuelto cubre la parcela íntegra (incluye edificios,
+  patios, jardines). M4 permitirá recortar manualmente la zona útil.

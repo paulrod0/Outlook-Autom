@@ -1,38 +1,51 @@
+import * as turf from "@turf/turf";
+import proj4 from "proj4";
+
 /**
- * Algoritmo de empaquetado de paneles sobre un polígono de cubierta.
+ * Empaquetado de paneles sobre un polígono de cubierta.
  *
- * Contrato definido aquí; implementación en M2 con Turf.js + proj4.
- * Ver §6 de docs/ARQUITECTURA.md para el pseudocódigo completo.
+ * Pasos:
+ *  1. Reproyectar el polígono de EPSG:4326 a la zona UTM ETRS89 local
+ *     (proyección métrica adecuada para España peninsular y Canarias).
+ *  2. Aplicar buffer interior de seguridad (`edgeMarginM`).
+ *  3. Calcular separación entre filas si no se pasa explícita, usando
+ *     la altura solar del 21 de diciembre a las 12h solares para la
+ *     latitud del centroide (regla habitual para evitar sombras entre filas).
+ *  4. Generar un grid de paneles alineado con el azimut. Cada panel es un
+ *     rectángulo de `panel.widthM × panel.heightM`.
+ *  5. Filtrar paneles cuyo rectángulo completo no está contenido en el
+ *     polígono útil (con tolerancia mínima por errores de coma flotante).
+ *  6. Aplicar opcionalmente un límite de potencia (130 kWp por referencia
+ *     catastral en Fase 1).
+ *
+ * El resultado se devuelve en EPSG:4326 (GeoJSON) listo para pintar en el mapa.
  */
 
 export type PanelModel = {
   manufacturer: string;
   model: string;
   peakWp: number;
-  widthM: number;
-  heightM: number;
+  widthM: number;  // dimensión "corta" del panel
+  heightM: number; // dimensión "larga" del panel
 };
 
 export type LayoutInput = {
-  polygon: GeoJSON.Polygon; // EPSG:4326, lon/lat
+  polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon;
   panel: PanelModel;
   tiltDeg: number;
-  azimuthDeg: number; // 180 = Sur
-  edgeMarginM: number; // margen interior
-  rowSpacingM?: number; // si no se especifica, se calcula por sombras
-  maxKw?: number; // límite por referencia catastral (130 kW)
+  azimuthDeg: number;
+  edgeMarginM: number;
+  rowSpacingM?: number;
+  maxKwp?: number;
 };
 
 export type LayoutResult = {
   panelCount: number;
   peakPowerKwp: number;
-  panels: GeoJSON.Feature<GeoJSON.Polygon>[]; // un feature por panel
+  panels: GeoJSON.Feature<GeoJSON.Polygon>[];
   usableAreaM2: number;
+  rowSpacingM: number;
 };
-
-export function computeLayout(_input: LayoutInput): LayoutResult {
-  throw new Error("computeLayout: implementación pendiente (M2)");
-}
 
 export const DEFAULT_PANELS: PanelModel[] = [
   {
@@ -57,3 +70,237 @@ export const DEFAULT_PANELS: PanelModel[] = [
     heightM: 2.382,
   },
 ];
+
+const deg2rad = (d: number) => (d * Math.PI) / 180;
+const rad2deg = (r: number) => (r * 180) / Math.PI;
+
+/** Define las proyecciones UTM ETRS89 sobre la marcha si no están en proj4. */
+function ensureUtmDef(zone: number, isNorth: boolean) {
+  const code = `EPSG:${isNorth ? 25800 + zone : 32700 + zone}`;
+  if (!proj4.defs(code)) {
+    const south = isNorth ? "" : " +south";
+    proj4.defs(
+      code,
+      `+proj=utm +zone=${zone} +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs${south}`,
+    );
+  }
+  return code;
+}
+
+function pickUtmZone(lon: number, lat: number): string {
+  const zone = Math.floor((lon + 180) / 6) + 1;
+  return ensureUtmDef(zone, lat >= 0);
+}
+
+/**
+ * Distancia mínima entre filas (de borde anterior a borde anterior) para
+ * que la sombra del panel a las 12h solares del solsticio de invierno no
+ * llegue a la base del panel siguiente.
+ *
+ *   altura_solar = 90 - lat - 23.44
+ *   d = h_panel * (cos(tilt) + sin(tilt) / tan(altura_solar))
+ *
+ * h_panel es la altura vertical efectiva del panel inclinado.
+ */
+function computeRowSpacing(latitudeDeg: number, panelHeightM: number, tiltDeg: number) {
+  const lat = Math.max(0, Math.min(60, Math.abs(latitudeDeg)));
+  const winterSolarAltitude = Math.max(5, 90 - lat - 23.44);
+  const t = deg2rad(tiltDeg);
+  const a = deg2rad(winterSolarAltitude);
+  return panelHeightM * (Math.cos(t) + Math.sin(t) / Math.tan(a));
+}
+
+export function computeLayout(input: LayoutInput): LayoutResult {
+  const { polygon, panel, tiltDeg, azimuthDeg, edgeMarginM, maxKwp } = input;
+
+  // 1) Centroide y elección de zona UTM para trabajar en metros.
+  const centroidFeature = turf.centroid(turf.feature(polygon));
+  const [lonC, latC] = centroidFeature.geometry.coordinates;
+  const utm = pickUtmZone(lonC, latC);
+
+  // 2) Buffer interior en lon/lat — turf.buffer asume coordenadas
+  //    geodésicas y aplica el offset en metros correctamente.
+  const buffered = turf.buffer(turf.feature(polygon), -Math.abs(edgeMarginM), {
+    units: "meters",
+  });
+  if (!buffered || !buffered.geometry) return emptyResult();
+
+  const usableLngLat = buffered.geometry as
+    | GeoJSON.Polygon
+    | GeoJSON.MultiPolygon;
+  if (usableLngLat.type !== "Polygon" && usableLngLat.type !== "MultiPolygon") {
+    return emptyResult();
+  }
+  const usableAreaM2 = turf.area(buffered);
+  if (usableAreaM2 <= 0) return emptyResult();
+
+  // 3) Reproyectar polígono útil a UTM para generar el grid en metros.
+  const usableUtm = reprojectPolygon(usableLngLat, "EPSG:4326", utm);
+
+  // 4) Separación entre filas (regla solsticio invierno) en metros.
+  const rowSpacing =
+    input.rowSpacingM && input.rowSpacingM > 0
+      ? input.rowSpacingM
+      : computeRowSpacing(latC, panel.heightM, tiltDeg);
+
+  // 5) Generar grid alineado con el azimut. 180 = paneles al sur.
+  const rotationDeg = azimuthDeg - 180;
+  const theta = deg2rad(rotationDeg);
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+
+  const [minX, minY, maxX, maxY] = bboxOfUtmGeom(usableUtm);
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const diag = Math.hypot(maxX - minX, maxY - minY);
+  const halfSpan = diag; // sobredimensionar para cubrir tras rotar
+
+  const stepX = panel.widthM;
+  const stepY = rowSpacing;
+
+  const panelsUtm: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
+  for (let v = -halfSpan; v <= halfSpan; v += stepY) {
+    for (let u = -halfSpan; u <= halfSpan; u += stepX) {
+      const rect = panelRectangleAt(
+        u,
+        v,
+        panel.widthM,
+        panel.heightM,
+        cos,
+        sin,
+        cx,
+        cy,
+      );
+      if (allCornersInside(rect, usableUtm)) {
+        panelsUtm.push(turf.polygon([rect]));
+      }
+    }
+  }
+
+  // 6) Reproyectar paneles UTM → lon/lat para el render.
+  const panelsLngLat = panelsUtm.map((f) =>
+    reprojectFeature(f, utm, "EPSG:4326"),
+  );
+
+  let limited = panelsLngLat;
+  if (maxKwp && maxKwp > 0) {
+    const maxPanels = Math.floor((maxKwp * 1000) / panel.peakWp);
+    if (limited.length > maxPanels) limited = limited.slice(0, maxPanels);
+  }
+
+  const peakPowerKwp = (limited.length * panel.peakWp) / 1000;
+
+  return {
+    panelCount: limited.length,
+    peakPowerKwp: Number(peakPowerKwp.toFixed(2)),
+    panels: limited,
+    usableAreaM2: Number(usableAreaM2.toFixed(1)),
+    rowSpacingM: Number(rowSpacing.toFixed(2)),
+  };
+}
+
+function bboxOfUtmGeom(
+  g: GeoJSON.Polygon | GeoJSON.MultiPolygon,
+): [number, number, number, number] {
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+  const polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
+  for (const poly of polys) {
+    for (const ring of poly) {
+      for (const [x, y] of ring) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  return [minX, minY, maxX, maxY];
+}
+
+function panelRectangleAt(
+  u: number,
+  v: number,
+  w: number,
+  h: number,
+  cos: number,
+  sin: number,
+  cx: number,
+  cy: number,
+): GeoJSON.Position[] {
+  const corners: Array<[number, number]> = [
+    [u, v],
+    [u + w, v],
+    [u + w, v + h],
+    [u, v + h],
+    [u, v],
+  ];
+  return corners.map(([x, y]) => {
+    const xr = x * cos - y * sin + cx;
+    const yr = x * sin + y * cos + cy;
+    return [xr, yr];
+  });
+}
+
+function allCornersInside(
+  ring: GeoJSON.Position[],
+  poly: GeoJSON.Polygon | GeoJSON.MultiPolygon,
+): boolean {
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = ring[i];
+    if (!turf.booleanPointInPolygon(turf.point([x, y]), turf.feature(poly))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function emptyResult(): LayoutResult {
+  return {
+    panelCount: 0,
+    peakPowerKwp: 0,
+    panels: [],
+    usableAreaM2: 0,
+    rowSpacingM: 0,
+  };
+}
+
+function reprojectPolygon(
+  geom: GeoJSON.Polygon | GeoJSON.MultiPolygon,
+  from: string,
+  to: string,
+): GeoJSON.Polygon | GeoJSON.MultiPolygon {
+  const project = (c: GeoJSON.Position): GeoJSON.Position => {
+    const [x, y] = proj4(from, to, [c[0], c[1]]);
+    return [x, y];
+  };
+
+  if (geom.type === "Polygon") {
+    return {
+      type: "Polygon",
+      coordinates: geom.coordinates.map((ring) => ring.map(project)),
+    };
+  }
+  return {
+    type: "MultiPolygon",
+    coordinates: geom.coordinates.map((poly) =>
+      poly.map((ring) => ring.map(project)),
+    ),
+  };
+}
+
+function reprojectFeature(
+  f: GeoJSON.Feature<GeoJSON.Polygon>,
+  from: string,
+  to: string,
+): GeoJSON.Feature<GeoJSON.Polygon> {
+  return {
+    ...f,
+    geometry: reprojectPolygon(f.geometry, from, to) as GeoJSON.Polygon,
+  };
+}
+
+// Suprime el warning sobre `rad2deg` por si no se usa en cambios futuros.
+void rad2deg;

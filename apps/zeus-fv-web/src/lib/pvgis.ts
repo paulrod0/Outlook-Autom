@@ -18,7 +18,7 @@ export const PvgisInputSchema = z.object({
   pvtech: z.enum(["crystSi", "CIS", "CdTe"]).default("crystSi"),
 });
 
-export type PvgisInput = z.infer<typeof PvgisInputSchema>;
+export type PvgisInput = z.input<typeof PvgisInputSchema>;
 
 export type PvgisResult = {
   yearlyKwh: number;

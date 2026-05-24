@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { DEFAULT_PANELS, type LayoutResult, type PanelModel } from "@/lib/panelLayout";
+import type { CommunityMember } from "@/lib/community";
 
 export type BillSummary = {
   cups?: string;
@@ -29,6 +30,7 @@ export type ProjectState = {
   azimuthDeg: number;
   edgeMarginM: number;
   ceLimit: boolean; // si true, aplica el máx 130 kWp por refcat (Fase 1)
+  communityMembers: CommunityMember[];
   bill: BillSummary | null;
   layout: LayoutResult | null;
   pvgis: {
@@ -53,6 +55,7 @@ const initialState: ProjectState = {
   azimuthDeg: 180,
   edgeMarginM: 0.5,
   ceLimit: false,
+  communityMembers: [],
   bill: null,
   layout: null,
   pvgis: null,

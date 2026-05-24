@@ -7,6 +7,7 @@
  * al cliente Supabase.
  */
 
+import type { CommunityMember } from "./community";
 import type { LayoutResult, PanelModel } from "./panelLayout";
 import { DEFAULT_PANELS } from "./panelLayout";
 import { getState, setState } from "./store";
@@ -29,6 +30,7 @@ export type ProjectSnapshot = {
     azimuthDeg: number;
     edgeMarginM: number;
     ceLimit: boolean;
+    communityMembers: CommunityMember[];
     layout: LayoutResult | null;
     pvgis:
       | { yearlyKwh: number; specificYield: number; monthlyKwh: number[] }
@@ -84,6 +86,7 @@ export function saveCurrentProject(name?: string): ProjectSnapshot {
       azimuthDeg: s.azimuthDeg,
       edgeMarginM: s.edgeMarginM,
       ceLimit: s.ceLimit,
+      communityMembers: s.communityMembers,
       layout: s.layout,
       pvgis: s.pvgis,
     },
@@ -121,6 +124,7 @@ export function loadProject(id: string): boolean {
     azimuthDeg: snapshot.data.azimuthDeg,
     edgeMarginM: snapshot.data.edgeMarginM,
     ceLimit: snapshot.data.ceLimit,
+    communityMembers: snapshot.data.communityMembers ?? [],
     layout: snapshot.data.layout,
     pvgis: snapshot.data.pvgis,
     status: snapshot.data.layout ? "ready" : "idle",

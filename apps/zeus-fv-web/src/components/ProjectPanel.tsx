@@ -612,27 +612,35 @@ function CommunitySection({
 function SavedProjectsSection({ canSave }: { canSave: boolean }) {
   const [items, setItems] = useState<ProjectSnapshot[]>([]);
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () => {
+    void listProjects().then(setItems);
+  };
 
   useEffect(() => {
-    if (open) setItems(listProjects());
+    if (open) refresh();
   }, [open]);
-
-  const refresh = () => setItems(listProjects());
 
   return (
     <Section title={`Mis proyectos (${items.length || "—"})`}>
       <div className="flex gap-2">
         <button
           type="button"
-          disabled={!canSave}
-          onClick={() => {
-            saveCurrentProject();
-            setOpen(true);
-            refresh();
+          disabled={!canSave || busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await saveCurrentProject();
+              setOpen(true);
+              refresh();
+            } finally {
+              setBusy(false);
+            }
           }}
           className="flex-1 rounded-md bg-zeus-panel/95 px-2 py-1.5 text-xs font-medium text-slate-200 ring-1 ring-white/10 hover:bg-zeus-panel disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Guardar
+          {busy ? "Guardando…" : "Guardar"}
         </button>
         <button
           type="button"
@@ -651,7 +659,7 @@ function SavedProjectsSection({ canSave }: { canSave: boolean }) {
             >
               <button
                 type="button"
-                onClick={() => loadProject(p.id)}
+                onClick={() => void loadProject(p.id)}
                 className="flex-1 truncate text-left hover:text-zeus-green"
                 title={`Guardado ${new Date(p.savedAt).toLocaleString("es-ES")}`}
               >
@@ -659,8 +667,8 @@ function SavedProjectsSection({ canSave }: { canSave: boolean }) {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  deleteProject(p.id);
+                onClick={async () => {
+                  await deleteProject(p.id);
                   refresh();
                 }}
                 className="text-rose-400 hover:text-rose-300"
@@ -675,9 +683,9 @@ function SavedProjectsSection({ canSave }: { canSave: boolean }) {
       )}
       {open && items.length === 0 && (
         <p className="rounded-md bg-slate-800/30 px-2 py-2 text-[11px] text-slate-400">
-          Aún no hay proyectos guardados. Los proyectos se almacenan en este
-          navegador (localStorage); la sincronización con Supabase llegará en
-          cuanto se provisione el proyecto.
+          Aún no hay proyectos guardados. Sin DATABASE_URL se guardan en este
+          navegador (localStorage); al configurar Neon se sincronizan en la
+          base de datos y quedan accesibles desde cualquier equipo.
         </p>
       )}
     </Section>

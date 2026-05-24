@@ -49,12 +49,22 @@ El MVP cubre estrictamente:
 - **Turf.js** para operaciones geométricas (buffer, intersect, área)
 
 ### Backend
-- **Supabase** (ya hay MCP configurado en este entorno):
-  - **Postgres + PostGIS** para almacenar proyectos, cubiertas y resultados
-  - **Auth** (email + magic link para comerciales internos)
-  - **Storage** para PDFs generados y capturas
-  - **Edge Functions** (Deno) para orquestar llamadas a PVGIS y Catastro
-- **Cache** en Postgres para respuestas de PVGIS por (lat, lon, kWp, tilt, azimuth) — PVGIS limita peticiones por IP.
+- **Neon** (Postgres serverless) como base de datos:
+  - tabla `projects` (JSONB con el snapshot del estudio) para almacenar
+    proyectos, cubiertas y resultados.
+  - driver `@neondatabase/serverless` sobre HTTP, ideal para Route
+    Handlers en Vercel.
+  - Sin `DATABASE_URL`, la app cae a localStorage del navegador de forma
+    transparente (útil en desarrollo y demos sin infraestructura).
+- **Next.js Route Handlers** orquestan las llamadas a PVGIS y Catastro
+  (User-Agent, caché, evitar CORS).
+- **Cache** de PVGIS vía `Cache-Control`/`revalidate` por (lat, lon, kWp,
+  tilt, azimuth) — PVGIS limita peticiones por IP.
+
+> Nota: el scaffold inicial usaba Supabase; se sustituyó por Neon a
+> petición de Pablo. Auth y Storage quedan pendientes de decidir
+> (se pueden añadir con NextAuth + almacenamiento de objetos cuando
+> haga falta).
 
 ### Servicios externos
 | Servicio | Uso | Coste |
@@ -238,7 +248,7 @@ Acciones:
 1. **Buscar dirección** → centra mapa, intenta autocargar polígono de Catastro.
 2. **Editar polígono** (vértices arrastrables) si Catastro no es preciso.
 3. **Recalcular** (auto al cambiar parámetros, con debounce).
-4. **Guardar proyecto** (a Supabase).
+4. **Guardar proyecto** (a Neon, o localStorage si no hay DB).
 
 ---
 
@@ -246,7 +256,7 @@ Acciones:
 
 | Hito | Contenido | Tiempo estimado |
 |------|-----------|-----------------|
-| **M0** | Scaffold Next.js + Supabase + Mapa satélite con búsqueda de dirección | 2-3 días |
+| **M0** | Scaffold Next.js + Neon + Mapa satélite con búsqueda de dirección | 2-3 días |
 | **M1** | Integración Catastro: dada una ref. o un click sobre el mapa, traer polígono | 3-4 días |
 | **M2** | Algoritmo de empaquetado + render de paneles | 4-5 días |
 | **M3** | Integración PVGIS + cacheado + panel de resultados | 2-3 días |
@@ -263,7 +273,7 @@ Acciones:
 
 Antes de empezar M0 conviene cerrar:
 
-1. **Hosting**: ¿Vercel + Supabase Cloud, o todo on-prem en infraestructura de Zeus?
+1. **Hosting**: ¿Vercel + Neon, o todo on-prem en infraestructura de Zeus?
 2. **Imagen satélite**: ¿Tenéis cuenta Mapbox? Si no, partimos con Esri (gratis, atribución obligatoria).
 3. **Catálogo de paneles**: ¿hay un listado preferido o trabajamos con los que aparecen en el infográfico (LONGi / JA Solar / Trina Vertex 650-720 Wp)?
 4. **Identidad visual**: ¿podéis pasar el logo en SVG, paleta de colores corporativa y fuente para que el render del PDF sea fiel al ejemplo Barceló Montecastillo?
@@ -347,7 +357,7 @@ create table solaredge_energy_daily (
 );
 ```
 
-Edge Function `sync_solaredge` ejecutada por cron (Supabase pg_cron) cada noche:
+Job `sync_solaredge` ejecutado por cron (Vercel Cron / pg_cron en Neon) cada noche:
 1. Listar sitios activos.
 2. Para cada uno: pedir `energy?timeUnit=DAY&startDate=last_sync&endDate=today`.
 3. Upsert en `solaredge_energy_daily`.
@@ -367,7 +377,7 @@ Con esto se cierra el ciclo: el comercial diseña con la app → se construye co
 Si se valida este documento, los pasos siguientes serían:
 
 1. Crear repo nuevo `zeus-fv-web` (o usar este `Outlook-Autom` como contenedor temporal) con scaffold Next.js + TypeScript + Tailwind.
-2. Provisionar proyecto Supabase (puedo hacerlo desde el MCP `2164bc5a-...` cuando confirméis nombre y región).
+2. Provisionar base de datos Neon (crear proyecto en neon.tech y poner `DATABASE_URL`).
 3. Implementar M0 y compartir URL de preview en Vercel.
 
 ---

@@ -11,9 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "@react-pdf/renderer": "^4.5.1",
-    "@supabase/ssr": "^0.5.2",
-    "@supabase/supabase-js": "^2.45.4",
     "@turf/turf": "^7.1.0",
     "fast-xml-parser": "^5.8.0",
     "maplibre-gl": "^4.7.1",
@@ -21,6 +20,7 @@
     "proj4": "^2.12.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "server-only": "^0.0.1",
     "unpdf": "^1.6.2",
     "zod": "^3.23.8"
   },

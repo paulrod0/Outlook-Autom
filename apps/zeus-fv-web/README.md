@@ -35,12 +35,26 @@ Validado end-to-end con el ejemplo Barceló Montecastillo (ref `5163125QA6656S`,
 
 ```bash
 cd apps/zeus-fv-web
-cp .env.example .env.local   # rellenar cuando exista proyecto Supabase
+cp .env.example .env.local   # opcional: rellenar DATABASE_URL de Neon
 npm install
 npm run dev
 ```
 
 La app queda en http://localhost:3000.
+
+## Persistencia (Neon)
+
+Los proyectos se guardan en **localStorage** del navegador por defecto.
+Para persistencia real (multi-equipo) usa **Neon** (Postgres serverless):
+
+1. Crea un proyecto gratis en https://neon.tech
+2. Copia la cadena de conexión (`postgresql://...?sslmode=require`)
+3. Ponla en `.env.local` como `DATABASE_URL=...`
+4. Reinicia `npm run dev`
+
+La tabla `projects` se crea automáticamente en la primera petición. Sin
+`DATABASE_URL`, los endpoints `/api/projects` responden 501 y el cliente
+cae a localStorage de forma transparente.
 
 ## Estructura
 
@@ -61,7 +75,7 @@ src/
 │   └── ProjectPanel.tsx                 # panel lateral reactivo
 └── lib/
     ├── geocoding.ts                     # cliente Nominatim
-    ├── supabase.ts                      # cliente Supabase browser
+    ├── db.ts                            # cliente Neon (Postgres serverless)
     ├── catastro.ts                      # OVCCoordenadas + INSPIRE WFS + GML parser
     ├── pvgis.ts                         # cliente PVGIS v5.3 con Zod
     ├── panelLayout.ts                   # empaquetado UTM + reproyección

@@ -10,6 +10,7 @@ import {
   View,
   pdf,
 } from "@react-pdf/renderer";
+import { computeMemberResults } from "./community";
 import { estimateCost, estimateProfitability } from "./economics";
 import type { ProjectState } from "./store";
 
@@ -253,6 +254,45 @@ function fmt(n: number | null | undefined, digits = 0): string {
   });
 }
 
+function CommunityBlock({ project }: { project: ProjectState }) {
+  const generation = project.pvgis?.yearlyKwh ?? 0;
+  const results = computeMemberResults(project.communityMembers, generation);
+
+  return (
+    <View style={styles.econDetail}>
+      <Text style={styles.econDetailTitle}>
+        Comunidad Energética — reparto (límite 130 kWp/refcat)
+      </Text>
+      <View style={[styles.row, { borderBottomColor: COLORS.green }]}>
+        <Text style={[styles.rowLabel, { flex: 2 }]}>Miembro</Text>
+        <Text style={[styles.rowValue, { flex: 1, textAlign: "right" }]}>
+          Coef.
+        </Text>
+        <Text style={[styles.rowValue, { flex: 1, textAlign: "right" }]}>
+          Asignado
+        </Text>
+        <Text style={[styles.rowValue, { flex: 1, textAlign: "right" }]}>
+          Cobertura
+        </Text>
+      </View>
+      {results.map((r) => (
+        <View key={r.member.id} style={styles.row}>
+          <Text style={[styles.rowLabel, { flex: 2 }]}>{r.member.name}</Text>
+          <Text style={[styles.rowValue, { flex: 1, textAlign: "right" }]}>
+            {fmt(r.member.coefficient * 100, 1)}%
+          </Text>
+          <Text style={[styles.rowValue, { flex: 1, textAlign: "right" }]}>
+            {fmt(r.assignedKwh, 0)} kWh
+          </Text>
+          <Text style={[styles.rowValue, { flex: 1, textAlign: "right" }]}>
+            {fmt(r.coveragePct, 0)}%
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export function OfferDocument({
   project,
   mapImage,
@@ -393,6 +433,9 @@ export function OfferDocument({
         </View>
 
         <EconomicsBlock project={project} />
+        {project.ceLimit && project.communityMembers.length > 0 && (
+          <CommunityBlock project={project} />
+        )}
         <Text style={styles.disclaimer}>
           Estimaciones orientativas. La oferta vinculante requiere visita
           técnica y validación con la tabla de costes interna.

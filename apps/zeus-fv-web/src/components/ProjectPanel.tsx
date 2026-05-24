@@ -3,6 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_PANELS } from "@/lib/panelLayout";
 import { estimateCost, estimateProfitability } from "@/lib/economics";
+import {
+  type CommunityMember,
+  coefficientSum,
+  computeMemberResults,
+  distributeByConsumption,
+  distributeEqually,
+  newMember,
+  normalizeCoefficients,
+  totalCommunityConsumption,
+} from "@/lib/community";
 import { loadBuildingFor, runLayoutAndPvgis } from "@/lib/pipeline";
 import {
   deleteProject,
@@ -153,6 +163,14 @@ export function ProjectPanel() {
         yearlyKwh={s.pvgis?.yearlyKwh ?? 0}
         bill={s.bill}
       />
+
+      {s.ceLimit && (
+        <CommunitySection
+          members={s.communityMembers}
+          generationKwh={s.pvgis?.yearlyKwh ?? 0}
+          bill={s.bill}
+        />
+      )}
 
       <SavedProjectsSection canSave={!!s.parcelGeometry} />
 
@@ -385,6 +403,209 @@ function Range({
         {unit ? <span className="ml-1 text-xs text-slate-400">{unit}</span> : null}
       </span>
     </div>
+  );
+}
+
+function CommunitySection({
+  members,
+  generationKwh,
+  bill,
+}: {
+  members: CommunityMember[];
+  generationKwh: number;
+  bill: ReturnType<typeof useProjectState>["bill"];
+}) {
+  const update = (next: CommunityMember[]) =>
+    setState({ communityMembers: next });
+
+  const results = useMemo(
+    () => computeMemberResults(members, generationKwh),
+    [members, generationKwh],
+  );
+  const sum = coefficientSum(members);
+  const totalConsumption = totalCommunityConsumption(members);
+  const sumOk = Math.abs(sum - 1) < 0.005;
+
+  const addMember = () => {
+    // Si hay factura y aún no hay miembros, el primer miembro hereda su consumo.
+    const seed =
+      members.length === 0 && bill?.estimatedAnnualKwh
+        ? newMember({
+            name: "Consumidor 1",
+            cups: bill.cups,
+            annualConsumptionKwh: bill.estimatedAnnualKwh,
+          })
+        : newMember({ name: `Miembro ${members.length + 1}` });
+    update([...members, seed]);
+  };
+
+  return (
+    <Section title={`Comunidad Energética (${members.length})`}>
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={addMember}
+          className="flex-1 rounded-md bg-zeus-green/90 px-2 py-1.5 text-xs font-medium text-slate-900 hover:bg-zeus-green"
+        >
+          + Miembro
+        </button>
+        <button
+          type="button"
+          disabled={members.length === 0}
+          onClick={() => update(distributeByConsumption(members))}
+          className="flex-1 rounded-md bg-zeus-panel/95 px-2 py-1.5 text-xs text-slate-200 ring-1 ring-white/10 hover:bg-zeus-panel disabled:opacity-40"
+        >
+          Repartir por consumo
+        </button>
+        <button
+          type="button"
+          disabled={members.length === 0}
+          onClick={() => update(distributeEqually(members))}
+          className="flex-1 rounded-md bg-zeus-panel/95 px-2 py-1.5 text-xs text-slate-200 ring-1 ring-white/10 hover:bg-zeus-panel disabled:opacity-40"
+        >
+          Equitativo
+        </button>
+      </div>
+
+      {members.length === 0 && (
+        <p className="rounded-md bg-slate-800/40 px-2 py-2 text-[11px] text-slate-400">
+          Añade los consumidores de la comunidad. El primero hereda el consumo
+          de la factura si la has subido.
+        </p>
+      )}
+
+      {members.map((m, i) => {
+        const r = results[i];
+        return (
+          <div
+            key={m.id}
+            className="space-y-1.5 rounded-md bg-slate-800/50 p-2 ring-1 ring-white/5"
+          >
+            <div className="flex items-center gap-1.5">
+              <input
+                type="text"
+                value={m.name}
+                onChange={(e) =>
+                  update(
+                    members.map((x) =>
+                      x.id === m.id ? { ...x, name: e.target.value } : x,
+                    ),
+                  )
+                }
+                className="w-full rounded bg-slate-900/60 px-2 py-1 text-xs text-slate-100"
+              />
+              <button
+                type="button"
+                onClick={() => update(members.filter((x) => x.id !== m.id))}
+                className="text-rose-400 hover:text-rose-300"
+                aria-label="Eliminar miembro"
+              >
+                ×
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <label className="text-[10px] text-slate-400">
+                Consumo kWh/año
+                <input
+                  type="number"
+                  value={m.annualConsumptionKwh}
+                  min={0}
+                  onChange={(e) =>
+                    update(
+                      members.map((x) =>
+                        x.id === m.id
+                          ? {
+                              ...x,
+                              annualConsumptionKwh: Math.max(
+                                0,
+                                parseFloat(e.target.value) || 0,
+                              ),
+                            }
+                          : x,
+                      ),
+                    )
+                  }
+                  className="mt-0.5 w-full rounded bg-slate-900/60 px-2 py-1 text-xs text-slate-100"
+                />
+              </label>
+              <label className="text-[10px] text-slate-400">
+                Coeficiente %
+                <input
+                  type="number"
+                  value={Number((m.coefficient * 100).toFixed(1))}
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  onChange={(e) =>
+                    update(
+                      members.map((x) =>
+                        x.id === m.id
+                          ? {
+                              ...x,
+                              coefficient:
+                                Math.max(0, parseFloat(e.target.value) || 0) /
+                                100,
+                            }
+                          : x,
+                      ),
+                    )
+                  }
+                  className="mt-0.5 w-full rounded bg-slate-900/60 px-2 py-1 text-xs text-slate-100"
+                />
+              </label>
+            </div>
+            <div className="flex justify-between text-[10px] text-slate-400">
+              <span>Asignado: {fmt(r.assignedKwh, 0)} kWh</span>
+              <span
+                className={
+                  r.coveragePct >= 100 ? "text-zeus-green" : "text-amber-400"
+                }
+              >
+                Cobertura {fmt(r.coveragePct, 0)}%
+              </span>
+            </div>
+          </div>
+        );
+      })}
+
+      {members.length > 0 && (
+        <div className="space-y-1">
+          <div
+            className={`flex items-center justify-between rounded-md px-2 py-1.5 text-xs ${
+              sumOk
+                ? "bg-zeus-green/15 text-zeus-green"
+                : "bg-amber-500/15 text-amber-300"
+            }`}
+          >
+            <span>Suma coeficientes</span>
+            <span>{fmt(sum * 100, 1)}%</span>
+          </div>
+          {!sumOk && (
+            <button
+              type="button"
+              onClick={() => update(normalizeCoefficients(members))}
+              className="w-full rounded-md bg-amber-500/80 px-2 py-1 text-[11px] font-medium text-slate-900 hover:bg-amber-500"
+            >
+              Normalizar a 100%
+            </button>
+          )}
+          <Metric
+            label="Consumo total comunidad"
+            value={fmt(totalConsumption, 0)}
+            unit="kWh"
+          />
+          <Metric
+            label="Generación / consumo"
+            value={
+              totalConsumption > 0
+                ? fmt((generationKwh / totalConsumption) * 100, 0)
+                : "—"
+            }
+            unit="%"
+          />
+        </div>
+      )}
+    </Section>
   );
 }
 

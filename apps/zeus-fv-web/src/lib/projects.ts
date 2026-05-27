@@ -58,6 +58,11 @@ async function detectDb(): Promise<boolean> {
   return dbEnabled;
 }
 
+/** Etiqueta legible del backend de persistencia activo. */
+export async function getBackend(): Promise<"neon" | "local"> {
+  return (await detectDb()) ? "neon" : "local";
+}
+
 // --- snapshot desde el estado actual ---
 
 function snapshotData(): ProjectSnapshotData {

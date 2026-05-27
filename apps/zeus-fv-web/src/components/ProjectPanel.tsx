@@ -16,6 +16,7 @@ import {
 import { loadBuildingFor, runLayoutAndPvgis } from "@/lib/pipeline";
 import {
   deleteProject,
+  getBackend,
   listProjects,
   loadProject,
   saveCurrentProject,
@@ -613,10 +614,15 @@ function SavedProjectsSection({ canSave }: { canSave: boolean }) {
   const [items, setItems] = useState<ProjectSnapshot[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [backend, setBackend] = useState<"neon" | "local" | null>(null);
 
   const refresh = () => {
     void listProjects().then(setItems);
   };
+
+  useEffect(() => {
+    void getBackend().then(setBackend);
+  }, []);
 
   useEffect(() => {
     if (open) refresh();
@@ -624,6 +630,20 @@ function SavedProjectsSection({ canSave }: { canSave: boolean }) {
 
   return (
     <Section title={`Mis proyectos (${items.length || "—"})`}>
+      {backend && (
+        <div className="flex items-center gap-1.5 text-[10px]">
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${
+              backend === "neon" ? "bg-zeus-green" : "bg-amber-400"
+            }`}
+          />
+          <span className="text-slate-400">
+            {backend === "neon"
+              ? "Guardando en Neon (base de datos)"
+              : "Guardando en este navegador (configura DATABASE_URL para Neon)"}
+          </span>
+        </div>
+      )}
       <div className="flex gap-2">
         <button
           type="button"

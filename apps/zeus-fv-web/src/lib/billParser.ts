@@ -39,7 +39,7 @@ const TARIFF_RE = /\b([23]\.0\s*TD|6\.[1-4]\s*TD|2\.1\s*TD)\b/i;
 const NUMBER_RE = /-?\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?|-?\d+(?:[.,]\d+)?/;
 const DATE_RE = /(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/g;
 
-function toNumber(raw: string | undefined): number | undefined {
+export function toNumber(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
   const cleaned = raw.replace(/\s/g, "").replace(/\.(?=\d{3}(\D|$))/g, "");
   const normalized = cleaned.replace(",", ".");
@@ -55,17 +55,17 @@ function parseDateDMY(d: string, m: string, y: string): Date | null {
   return date;
 }
 
-function findCups(text: string): string | undefined {
+export function findCups(text: string): string | undefined {
   const m = CUPS_RE.exec(text);
   return m ? m[0].toUpperCase().replace(/\s/g, "") : undefined;
 }
 
-function findTariff(text: string): string | undefined {
+export function findTariff(text: string): string | undefined {
   const m = TARIFF_RE.exec(text);
   return m ? m[1].toUpperCase().replace(/\s/g, "") : undefined;
 }
 
-function findContractedPower(text: string): number[] | undefined {
+export function findContractedPower(text: string): number[] | undefined {
   // Buscamos un bloque tipo "Potencia contratada" + lista de números en kW.
   const idx = text.search(/Potencia\s+contratada/i);
   if (idx < 0) return undefined;
@@ -81,7 +81,7 @@ function findContractedPower(text: string): number[] | undefined {
   return nums.length ? nums : undefined;
 }
 
-function findConsumption(text: string): number | undefined {
+export function findConsumption(text: string): number | undefined {
   // 1) "Consumo total ... 1.234 kWh"
   let re = /Consumo\s*(?:total|del?\s*periodo)?[^\d]{0,40}(-?\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?)\s*kWh/i;
   let m = text.match(re);
@@ -112,7 +112,7 @@ function findConsumption(text: string): number | undefined {
   return undefined;
 }
 
-function findPeriod(text: string): { start?: Date; end?: Date } {
+export function findPeriod(text: string): { start?: Date; end?: Date } {
   // "Periodo de facturación: del DD/MM/YYYY al DD/MM/YYYY"
   const m = text.match(
     /(?:Periodo|Per[ií]odo)\s*(?:de\s*facturaci[oó]n)?[\s:]*(?:del?\s*)?(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\s*(?:al?|a|\-|hasta)\s*(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/i,
@@ -138,7 +138,7 @@ function findPeriod(text: string): { start?: Date; end?: Date } {
   return {};
 }
 
-function findTotal(text: string): number | undefined {
+export function findTotal(text: string): number | undefined {
   // "Importe total ... 87,45 €"
   const m = text.match(
     /(?:Importe|Total)\s+(?:total|factura)?[^\d€]{0,30}(-?\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?)\s*€/i,
@@ -150,7 +150,7 @@ function findTotal(text: string): number | undefined {
   return undefined;
 }
 
-function findSupplyAddress(text: string): string | undefined {
+export function findSupplyAddress(text: string): string | undefined {
   // "Dirección de suministro:" / "Punto de suministro:" + línea siguiente
   const m = text.match(
     /(?:Direcci[oó]n\s+(?:de\s+)?suministro|Punto\s+de\s+suministro|Lugar\s+de\s+suministro)\s*:?\s*([^\n\r]{8,160})/i,
@@ -158,14 +158,14 @@ function findSupplyAddress(text: string): string | undefined {
   return m ? m[1].trim().replace(/\s{2,}/g, " ") : undefined;
 }
 
-export async function parseBillPdf(buffer: ArrayBuffer): Promise<BillData> {
-  const doc = await getDocumentProxy(new Uint8Array(buffer));
-  const { text: pages } = await extractText(doc, { mergePages: false });
-  const text = Array.isArray(pages) ? pages.join("\n") : String(pages);
-
+/**
+ * Aplica todos los heurísticos sobre un bloque de texto ya extraído.
+ * Separado de `parseBillPdf` para poder testarlo sin depender de PDFs.
+ */
+export function parseBillText(rawText: string): BillData {
   // Algunas facturas tienen mucho ruido entre letras (caracteres en celdas
   // separadas). Compactamos espacios para que los regex funcionen.
-  const compact = text.replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n");
+  const compact = rawText.replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n");
 
   const cups = findCups(compact);
   const tariff = findTariff(compact);
@@ -200,4 +200,11 @@ export async function parseBillPdf(buffer: ArrayBuffer): Promise<BillData> {
     supplyAddress,
     rawTextSample: compact.slice(0, 500),
   };
+}
+
+export async function parseBillPdf(buffer: ArrayBuffer): Promise<BillData> {
+  const doc = await getDocumentProxy(new Uint8Array(buffer));
+  const { text: pages } = await extractText(doc, { mergePages: false });
+  const text = Array.isArray(pages) ? pages.join("\n") : String(pages);
+  return parseBillText(text);
 }

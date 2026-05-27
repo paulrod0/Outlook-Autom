@@ -49,5 +49,25 @@ export async function ensureSchema(): Promise<void> {
       updated_at  timestamptz not null default now()
     )
   `;
+  await sql`
+    create table if not exists solaredge_sites (
+      id              uuid primary key default gen_random_uuid(),
+      project_id      uuid references projects(id) on delete set null,
+      se_site_id      bigint unique not null,
+      name            text,
+      installed_kwp   numeric,
+      commissioned_at date,
+      last_sync_at    timestamptz,
+      created_at      timestamptz not null default now()
+    )
+  `;
+  await sql`
+    create table if not exists solaredge_energy_daily (
+      site_id    uuid not null references solaredge_sites(id) on delete cascade,
+      day        date not null,
+      energy_kwh numeric not null,
+      primary key (site_id, day)
+    )
+  `;
   migrated = true;
 }

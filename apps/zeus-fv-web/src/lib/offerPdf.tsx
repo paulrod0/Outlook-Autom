@@ -10,25 +10,26 @@ import {
   View,
   pdf,
 } from "@react-pdf/renderer";
+import { BRAND, hasBrandLogo } from "./branding";
 import { computeMemberResults } from "./community";
 import { estimateCost, estimateProfitability } from "./economics";
 import type { ProjectState } from "./store";
 
 /**
  * Genera una oferta preliminar (1 página A4) con el estilo corporativo
- * básico de Zeus. La oferta definitiva (estilo Barceló Montecastillo)
- * se construirá en M5b cuando dispongamos del logo SVG y la paleta
- * corporativa oficiales (decisión pendiente §10.4 del documento).
+ * básico de Zeus. La paleta y nombre comercial salen de `lib/branding.ts`
+ * para poder personalizar cuando llegue el manual de marca oficial
+ * (decisión pendiente §10.4 del documento de arquitectura).
  */
 
 const COLORS = {
-  bg: "#0b1220",
-  panel: "#0f172a",
-  green: "#22c55e",
-  greenDim: "#16a34a",
-  textLight: "#f1f5f9",
-  textDim: "#94a3b8",
-  border: "#1e293b",
+  bg: BRAND.colors.bg,
+  panel: BRAND.colors.panel,
+  green: BRAND.colors.accent,
+  greenDim: BRAND.colors.accentDim,
+  textLight: BRAND.colors.textLight,
+  textDim: BRAND.colors.textDim,
+  border: BRAND.colors.border,
 };
 
 const styles = StyleSheet.create({
@@ -58,6 +59,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     paddingTop: 1,
   },
+  brandLogo: { width: 32, height: 32, objectFit: "contain" },
   brandText: { color: COLORS.textLight, fontSize: 16, fontWeight: "bold" },
   brandSub: { color: COLORS.textDim, fontSize: 9 },
   title: { color: COLORS.green, fontSize: 12, fontWeight: "bold" },
@@ -304,16 +306,20 @@ export function OfferDocument({
 
   return (
     <Document
-      title={`Oferta FV ${project.clientName || "Zeus"} ${today}`}
-      author="Zeus Energía"
+      title={`Oferta FV ${project.clientName || BRAND.companyName} ${today}`}
+      author={BRAND.companyName}
     >
       <Page size="A4" style={styles.page}>
         <View style={styles.header}>
           <View style={styles.brand}>
-            <Text style={styles.brandBolt}>Z</Text>
+            {hasBrandLogo() ? (
+              <Image src={BRAND.logoUrl} style={styles.brandLogo} />
+            ) : (
+              <Text style={styles.brandBolt}>Z</Text>
+            )}
             <View>
-              <Text style={styles.brandText}>Zeus Energía</Text>
-              <Text style={styles.brandSub}>Powered by Optimus Grupo</Text>
+              <Text style={styles.brandText}>{BRAND.companyName}</Text>
+              <Text style={styles.brandSub}>{BRAND.tagline}</Text>
             </View>
           </View>
           <View>
@@ -443,8 +449,8 @@ export function OfferDocument({
 
         <View style={styles.footer} fixed>
           <Text>
-            Zeus Energía · Estudio preliminar generado automáticamente. Sujeto
-            a visita técnica.
+            {BRAND.companyName} · Estudio preliminar generado automáticamente.
+            Sujeto a visita técnica.
           </Text>
           <Text>{today}</Text>
         </View>

@@ -269,11 +269,11 @@ export function MapWorkspace() {
   const canEdit = !!project.parcelGeometry;
 
   return (
-    <section className="relative">
+    <section className="relative h-full">
       <div ref={containerRef} className="absolute inset-0" />
-      <div className="absolute left-4 top-4 z-10 w-[420px] max-w-[calc(100%-2rem)]">
+      <div className="absolute left-3 right-14 top-3 z-10 max-w-[420px] sm:left-4 sm:top-4 md:right-auto">
         <AddressSearch disabled={!ready} onPick={onPick} />
-        <p className="mt-2 rounded-md bg-zeus-panel/90 px-3 py-1.5 text-[11px] text-slate-300 shadow ring-1 ring-white/5">
+        <p className="mt-2 hidden rounded-md bg-zeus-panel/90 px-3 py-1.5 text-[11px] text-slate-300 shadow ring-1 ring-white/5 sm:block">
           {drawMode
             ? "Click sobre el mapa para añadir vértices a la zona de exclusión. Al terminar, pulsa Cerrar zona."
             : editMode
@@ -282,7 +282,7 @@ export function MapWorkspace() {
         </p>
       </div>
       {canEdit && (
-        <div className="absolute right-4 top-4 z-10 flex w-52 flex-col gap-2">
+        <div className="absolute bottom-16 right-3 z-10 flex w-44 flex-col gap-2 md:bottom-auto md:right-4 md:top-4 md:w-52">
           {project.buildingGeometry && (
             <button
               type="button"

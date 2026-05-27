@@ -43,7 +43,7 @@ export function ProjectPanel() {
   }, [s.panel, s.tiltDeg, s.azimuthDeg, s.edgeMarginM, s.ceLimit, s.parcelGeometry]);
 
   return (
-    <aside className="flex h-full flex-col gap-4 overflow-y-auto border-l border-white/10 bg-zeus-panel p-5">
+    <aside className="flex flex-1 flex-col gap-4 border-t border-white/10 bg-zeus-panel p-4 md:h-full md:min-h-0 md:overflow-y-auto md:border-l md:border-t-0 md:p-5">
       <header className="flex items-center gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-md bg-zeus-green/20 text-zeus-green">
           <BoltIcon />

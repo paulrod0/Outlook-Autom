@@ -50,7 +50,7 @@ function LoginForm() {
             </svg>
           </div>
           <div>
-            <h1 className="text-lg font-semibold text-slate-100">Zeus FV</h1>
+            <h1 className="text-lg font-semibold text-slate-100">Eficiencia</h1>
             <p className="text-xs text-slate-400">Acceso interno</p>
           </div>
         </div>
@@ -94,7 +94,7 @@ function LoginForm() {
         </button>
 
         <p className="text-center text-[11px] text-slate-500">
-          Acceso restringido al equipo comercial de Zeus Energía.
+          Acceso restringido al equipo comercial de Grupo Optimus.
         </p>
       </form>
     </main>

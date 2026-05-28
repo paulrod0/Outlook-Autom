@@ -46,7 +46,7 @@ Cuando se quiera blindar producción:
    ```
 3. Pega la lista en `.env.local`:
    ```bash
-   AUTH_USERS=[{"email":"pablo@zeus.es","name":"Pablo","passwordHash":"$2b$10$..."}]
+   AUTH_USERS=[{"email":"pablo@grupo-optimus.com","name":"Pablo","passwordHash":"$2b$10$..."}]
    AUTH_ENFORCE=1
    ```
 4. Reinicia. Cualquier ruta exige sesión; el login está en `/login`.

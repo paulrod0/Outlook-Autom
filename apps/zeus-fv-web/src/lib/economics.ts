@@ -1,7 +1,7 @@
 /**
  * Modelo orientativo de costes y rentabilidad para una instalación FV.
  *
- * Las cifras son rangos típicos del sector (no de Zeus). Cuando
+ * Las cifras son rangos típicos del sector (no de Grupo Optimus). Cuando
  * Alfredo facilite la tabla €/kWp definitiva, basta con sustituir
  * los valores de `COST_BRACKETS` y `OVERHEADS`.
  *

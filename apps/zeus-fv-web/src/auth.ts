@@ -7,7 +7,7 @@ import bcrypt from "bcryptjs";
  *
  * Usuarios definidos vía variable de entorno `AUTH_USERS` como JSON:
  *
- *   AUTH_USERS=[{"email":"pablo@zeus.es","name":"Pablo","passwordHash":"$2b$10$..."}]
+ *   AUTH_USERS=[{"email":"pablo@grupo-optimus.com","name":"Pablo","passwordHash":"$2b$10$..."}]
  *
  * `passwordHash` se genera con bcrypt. Helper rápido:
  *   node -e "console.log(require('bcryptjs').hashSync('miClave', 10))"
@@ -51,7 +51,7 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
   pages: { signIn: "/login" },
   providers: [
     Credentials({
-      name: "Zeus",
+      name: "Grupo Optimus",
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Contraseña", type: "password" },

@@ -8,16 +8,16 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Zeus FV — Diseñador de instalaciones fotovoltaicas",
+  title: "Eficiencia — Grupo Optimus",
   description:
-    "Herramienta interna de Zeus Energía para el diseño, dimensionado y oferta de instalaciones fotovoltaicas y Comunidades Energéticas.",
+    "Suite interna de Grupo Optimus para diseño y comercialización de instalaciones fotovoltaicas, Comunidades Energéticas y PPA.",
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
-  themeColor: "#0b1220",
+  themeColor: "#081A33",
 };
 
 export default function RootLayout({
@@ -27,7 +27,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es" className={inter.variable}>
-      <body className="bg-zeus-dark text-slate-100 antialiased">{children}</body>
+      <body className="bg-optimus-navyDeep text-slate-100 antialiased">{children}</body>
     </html>
   );
 }

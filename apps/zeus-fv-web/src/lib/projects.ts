@@ -11,12 +11,15 @@
 import type { CommunityMember } from "./community";
 import type { LayoutResult, PanelModel } from "./panelLayout";
 import { DEFAULT_PANELS } from "./panelLayout";
-import { getState, setState } from "./store";
+import { getState, setState, type ProductType, type StructuralAttachment } from "./store";
 
 const STORAGE_KEY = "zeus-fv:projects:v1";
 
 export type ProjectSnapshotData = {
+  productType?: ProductType;
   clientName: string;
+  commercialName?: string;
+  commissionEur?: number;
   reference: string | null;
   address: string | null;
   centroid: { lat: number; lon: number } | null;
@@ -33,6 +36,9 @@ export type ProjectSnapshotData = {
   pvgis:
     | { yearlyKwh: number; specificYield: number; monthlyKwh: number[] }
     | null;
+  ppa?: { energyPriceEurKwh: number; contractYears: number; indexationPct: number };
+  ce?: { optionYears: 20 | 25 | 30; incomeAnnualEur: number };
+  structural?: StructuralAttachment | null;
 };
 
 export type ProjectSnapshot = {
@@ -68,7 +74,10 @@ export async function getBackend(): Promise<"neon" | "local"> {
 function snapshotData(): ProjectSnapshotData {
   const s = getState();
   return {
+    productType: s.productType,
     clientName: s.clientName,
+    commercialName: s.commercialName,
+    commissionEur: s.commissionEur,
     reference: s.reference,
     address: s.address,
     centroid: s.centroid,
@@ -83,6 +92,9 @@ function snapshotData(): ProjectSnapshotData {
     communityMembers: s.communityMembers,
     layout: s.layout,
     pvgis: s.pvgis,
+    ppa: s.ppa,
+    ce: s.ce,
+    structural: s.structural,
   };
 }
 
@@ -180,7 +192,10 @@ function applySnapshot(data: ProjectSnapshotData): void {
     ) ?? DEFAULT_PANELS[0];
 
   setState({
+    productType: data.productType ?? "fv",
     clientName: data.clientName,
+    commercialName: data.commercialName ?? "",
+    commissionEur: data.commissionEur ?? 0,
     reference: data.reference,
     address: data.address,
     centroid: data.centroid,
@@ -195,6 +210,9 @@ function applySnapshot(data: ProjectSnapshotData): void {
     communityMembers: data.communityMembers ?? [],
     layout: data.layout,
     pvgis: data.pvgis,
+    ppa: data.ppa ?? { energyPriceEurKwh: 0.069, contractYears: 15, indexationPct: 2 },
+    ce: data.ce ?? { optionYears: 30, incomeAnnualEur: 0 },
+    structural: data.structural ?? null,
     status: data.layout ? "ready" : "idle",
     error: null,
   });

@@ -16,8 +16,20 @@ export type BillSummary = {
   supplyAddress?: string;
 };
 
+export type ProductType = "fv" | "ce" | "ppa";
+
+export type StructuralAttachment = {
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  dataUrl: string;
+};
+
 export type ProjectState = {
+  productType: ProductType;
   clientName: string;
+  commercialName: string;
+  commissionEur: number;
   reference: string | null;
   address: string | null;
   centroid: { lat: number; lon: number } | null;
@@ -38,12 +50,28 @@ export type ProjectState = {
     specificYield: number;
     monthlyKwh: number[];
   } | null;
+  // PPA: parámetros del contrato sin inversión.
+  ppa: {
+    energyPriceEurKwh: number; // p.ej. 0.069
+    contractYears: number;     // 15, 20, 25
+    indexationPct: number;     // 2% anual
+  };
+  // CE: parámetros del contrato de cesión de cubierta.
+  ce: {
+    optionYears: 20 | 25 | 30;
+    incomeAnnualEur: number;   // €/año fijos por la opción elegida
+  };
+  // Estudio estructural adjunto (opcional, hasta ~5MB).
+  structural: StructuralAttachment | null;
   status: "idle" | "loading-parcel" | "computing" | "loading-pvgis" | "ready" | "error";
   error: string | null;
 };
 
 const initialState: ProjectState = {
+  productType: "fv",
   clientName: "",
+  commercialName: "",
+  commissionEur: 0,
   reference: null,
   address: null,
   centroid: null,
@@ -59,6 +87,16 @@ const initialState: ProjectState = {
   bill: null,
   layout: null,
   pvgis: null,
+  ppa: {
+    energyPriceEurKwh: 0.069,
+    contractYears: 15,
+    indexationPct: 2,
+  },
+  ce: {
+    optionYears: 30,
+    incomeAnnualEur: 0,
+  },
+  structural: null,
   status: "idle",
   error: null,
 };

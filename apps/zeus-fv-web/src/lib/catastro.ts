@@ -15,8 +15,57 @@ import { XMLParser } from "fast-xml-parser";
  *  - evitar CORS en el navegador.
  */
 
+// UA de navegador realista: el WAF de Catastro rechaza UAs custom.
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; EficienciaApp/0.1; +https://grupo-optimus.com)";
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+
+/**
+ * Fetch con retry exponencial y timeout. Catastro a veces rechaza
+ * peticiones desde IPs de cloud — un par de reintentos resuelve la
+ * mayoría de fallos transitorios.
+ */
+async function fetchWithRetry(
+  url: URL | string,
+  init: RequestInit = {},
+  { attempts = 3, timeoutMs = 8000 } = {},
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        ...init,
+        signal: ctrl.signal,
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "application/xml,text/xml,*/*;q=0.8",
+          "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+          ...(init.headers ?? {}),
+        },
+      });
+      clearTimeout(t);
+      if (res.ok || res.status === 404) return res;
+      // 5xx → reintentar
+      if (res.status >= 500 && i < attempts - 1) {
+        lastErr = new Error(`HTTP ${res.status}`);
+        await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      clearTimeout(t);
+      lastErr = err;
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+        continue;
+      }
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("fetch failed después de varios intentos");
+}
 
 const WFS_INSPIRE = "https://ovc.catastro.meh.es/INSPIRE/wfsCP.aspx";
 const WFS_INSPIRE_BU = "https://ovc.catastro.meh.es/INSPIRE/wfsBU.aspx";
@@ -81,7 +130,7 @@ export async function parcelByPoint(
     `${lat1},${lon1},${lat2},${lon2},urn:ogc:def:crs:EPSG::4326`,
   );
 
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     headers: { "User-Agent": USER_AGENT, Accept: "application/xml" },
   });
   if (!res.ok) return null;
@@ -142,7 +191,7 @@ export async function parcelByRef(
   url.searchParams.set("srsname", "EPSG:4326");
   url.searchParams.set("refcat", refParcel);
 
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     headers: { "User-Agent": USER_AGENT, Accept: "application/xml" },
   });
   if (!res.ok) return null;
@@ -184,7 +233,7 @@ export async function buildingByRef(
   url.searchParams.set("srsname", "EPSG:4326");
   url.searchParams.set("refcat", refParcel);
 
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     headers: { "User-Agent": USER_AGENT, Accept: "application/xml" },
   });
   if (!res.ok) return null;

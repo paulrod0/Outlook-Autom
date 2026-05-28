@@ -1,10 +1,11 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect } from "react";
 import { MapWorkspace } from "@/components/MapWorkspace";
 import { ProjectPanel } from "@/components/ProjectPanel";
-import { BRAND } from "@/lib/branding";
+import { BRAND, hasBrandLogo } from "@/lib/branding";
 import type { ProductType } from "@/lib/store";
 import { setState } from "@/lib/store";
 
@@ -32,12 +33,23 @@ export function StudioLayout({
         <div className="flex items-center gap-3">
           <Link
             href="/"
-            className="flex items-center gap-2 text-slate-300 transition hover:text-optimus-cyan"
+            className="flex items-center gap-2 text-slate-300 transition hover:opacity-80"
             title="Volver al selector"
           >
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-optimus-cyan font-bold text-optimus-navyDeep">
-              G
-            </span>
+            {hasBrandLogo() ? (
+              <Image
+                src={BRAND.logoUrl}
+                alt={BRAND.companyName}
+                width={120}
+                height={48}
+                priority
+                className="h-7 w-auto"
+              />
+            ) : (
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-optimus-cyan font-bold text-optimus-navyDeep">
+                G
+              </span>
+            )}
             <span className="font-semibold uppercase tracking-wider">
               {BRAND.appName}
             </span>

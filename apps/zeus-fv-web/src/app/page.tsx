@@ -1,5 +1,6 @@
+import Image from "next/image";
 import Link from "next/link";
-import { BRAND, PRODUCTS, type ProductKey } from "@/lib/branding";
+import { BRAND, PRODUCTS, hasBrandLogo, type ProductKey } from "@/lib/branding";
 
 const ROUTES: Record<ProductKey, string | null> = {
   fv: "/fv",
@@ -22,15 +23,28 @@ export default function Home() {
       <div className="mx-auto max-w-6xl px-6 py-12">
         <header className="flex items-center justify-between border-b border-white/10 pb-6">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-optimus-cyan text-optimus-navyDeep font-bold">
-              G
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-optimus-cyanLight">
-                {BRAND.companyName}
-              </p>
-              <h1 className="text-xl font-semibold">{BRAND.appName}</h1>
-            </div>
+            {hasBrandLogo() ? (
+              <Image
+                src={BRAND.logoUrl}
+                alt={BRAND.companyName}
+                width={180}
+                height={72}
+                priority
+                className="h-12 w-auto"
+              />
+            ) : (
+              <>
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-optimus-cyan text-optimus-navyDeep font-bold">
+                  G
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-optimus-cyanLight">
+                    {BRAND.companyName}
+                  </p>
+                  <h1 className="text-xl font-semibold">{BRAND.appName}</h1>
+                </div>
+              </>
+            )}
           </div>
           <p className="hidden text-xs text-slate-400 sm:block">{BRAND.tagline}</p>
         </header>

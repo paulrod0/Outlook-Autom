@@ -37,6 +37,15 @@ export type LayoutInput = {
   edgeMarginM: number;
   rowSpacingM?: number;
   maxKwp?: number;
+  /**
+   * Lado del bloque de paneles antes de un pasillo cortafuegos.
+   * CTE DB-SI recomienda bloques de ≤ 40 m con pasillo de ≥ 1 m.
+   * Si se omite, se usa 40 m para polígonos > 1.000 m² y desactivado
+   * para polígonos más pequeños (doméstico).
+   */
+  aisleBlockSideM?: number;
+  /** Ancho del pasillo cortafuegos (m). Default 1,2 m. */
+  aisleWidthM?: number;
 };
 
 export type LayoutResult = {
@@ -119,11 +128,38 @@ export function computeLayout(input: LayoutInput): LayoutResult {
   const [lonC, latC] = centroidFeature.geometry.coordinates;
   const utm = pickUtmZone(lonC, latC);
 
-  // 2) Buffer interior en lon/lat — turf.buffer asume coordenadas
-  //    geodésicas y aplica el offset en metros correctamente.
-  const buffered = turf.buffer(turf.feature(polygon), -Math.abs(edgeMarginM), {
-    units: "meters",
-  });
+  // 2a) Apertura morfológica: -kernel + +kernel elimina apéndices estrechos
+  //     (canopies, pasarelas, voladizos) que Catastro registra como parte
+  //     del edificio pero no son cubierta utilizable para FV. Para polígonos
+  //     pequeños (doméstico) el kernel se reduce para no comerse el chalet.
+  const polygonArea = turf.area(turf.feature(polygon));
+  const morphKernel =
+    polygonArea > 20000 ? 2.5 :
+    polygonArea > 5000 ? 1.5 :
+    polygonArea > 500 ? 0.5 :
+    0; // desactivado en doméstico
+  let cleaned: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> =
+    turf.feature(polygon);
+  if (morphKernel > 0) {
+    const shrunk = turf.buffer(cleaned, -morphKernel, { units: "meters" });
+    if (shrunk && shrunk.geometry) {
+      const reopened = turf.buffer(shrunk, morphKernel, { units: "meters" });
+      if (reopened && reopened.geometry) {
+        cleaned = reopened as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>;
+      }
+    }
+  }
+
+  // 2b) Margen al borde real: lo que pida el usuario + un mínimo según escala
+  //     (CTE DB-SI: separación ≥ 0,5 m del borde; instalación grande pide más).
+  const minEdgeForScale =
+    polygonArea > 20000 ? 2.5 :
+    polygonArea > 5000 ? 1.5 :
+    0.5;
+  const effectiveEdge = Math.max(Math.abs(edgeMarginM), minEdgeForScale);
+
+  // 2c) Buffer interior con el margen efectivo.
+  const buffered = turf.buffer(cleaned, -effectiveEdge, { units: "meters" });
   if (!buffered || !buffered.geometry) return emptyResult();
 
   const usableLngLat = buffered.geometry as
@@ -151,6 +187,13 @@ export function computeLayout(input: LayoutInput): LayoutResult {
   const [utmMinX, utmMinY, utmMaxX, utmMaxY] = bboxOfUtmGeom(usableUtm);
   const cx = (utmMinX + utmMaxX) / 2;
   const cy = (utmMinY + utmMaxY) / 2;
+
+  // 5b) Bloques con pasillo cortafuegos (CTE DB-SI). Bloque máx 40 m + 1,2 m
+  //     de pasillo. Sólo se activa para polígonos > 1.000 m² (industrial /
+  //     PyME); en doméstico no tiene sentido.
+  const aisleBlockSide =
+    input.aisleBlockSideM ?? (polygonArea > 1000 ? 40 : 0);
+  const aisleWidth = input.aisleWidthM ?? 1.2;
 
   // 6) Búsqueda: probar rotaciones cada 5° en [0°, 90°) (más allá repite),
   //    y para cada rotación varios offsets pequeños. Nos quedamos con la
@@ -185,6 +228,8 @@ export function computeLayout(input: LayoutInput): LayoutResult {
           sin,
           cx,
           cy,
+          aisleBlockSide,
+          aisleWidth,
         );
         if (panels.length > bestPanels.length) {
           bestPanels = panels;
@@ -230,10 +275,31 @@ function generateGrid(
   sin: number,
   cx: number,
   cy: number,
+  aisleBlockSideM: number,
+  aisleWidthM: number,
 ): GeoJSON.Feature<GeoJSON.Polygon>[] {
   const panels: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
+  // Origen del grid en coords locales (u, v) = (uStart, vStart).
+  // Definimos bloques de aisleBlockSideM × aisleBlockSideM con pasillo
+  // cortafuegos al final de cada bloque (en U y en V).
+  // Si aisleBlockSideM <= 0 → bloques desactivados (doméstico).
+  const useBlocks = aisleBlockSideM > 0;
   for (let v = vStart; v <= vEnd; v += stepY) {
+    if (useBlocks) {
+      const vOffset = v - vStart;
+      const positionInBlockV = vOffset - Math.floor(vOffset / aisleBlockSideM) * aisleBlockSideM;
+      if (positionInBlockV + panel.heightM > aisleBlockSideM - aisleWidthM) {
+        continue; // panel quedaría dentro del pasillo en V
+      }
+    }
     for (let u = uStart; u <= uEnd; u += stepX) {
+      if (useBlocks) {
+        const uOffset = u - uStart;
+        const positionInBlockU = uOffset - Math.floor(uOffset / aisleBlockSideM) * aisleBlockSideM;
+        if (positionInBlockU + panel.widthM > aisleBlockSideM - aisleWidthM) {
+          continue; // panel quedaría dentro del pasillo en U
+        }
+      }
       const rect = panelRectangleAt(
         u,
         v,

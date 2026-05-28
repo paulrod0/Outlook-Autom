@@ -4,6 +4,14 @@
  * Las cifras son rangos típicos del sector (no de Zeus). Cuando
  * Alfredo facilite la tabla €/kWp definitiva, basta con sustituir
  * los valores de `COST_BRACKETS` y `OVERHEADS`.
+ *
+ * El modelo de rentabilidad asume:
+ *  - Tarifa eléctrica deducida de la factura si está disponible;
+ *    si no, una ladder por tamaño (doméstico → industrial).
+ *  - Ratio de autoconsumo dependiente del tamaño y, si hay factura,
+ *    capado por la demanda anual del cliente.
+ *  - Excedentes compensados a precio mayorista (~0,04 €/kWh) — más
+ *    realista que asumir media tarifa.
  */
 
 import type { BillSummary } from "./store";
@@ -27,6 +35,9 @@ export type CostOverhead = {
   high: number;
   /** Si la línea sólo aplica a instalaciones grandes (>kwp). */
   minKwp?: number;
+  /** Si la línea escala con el tamaño: € por kWp por encima del minKwp. */
+  perKwpLow?: number;
+  perKwpHigh?: number;
 };
 
 /**
@@ -39,16 +50,69 @@ export const COST_BRACKETS: CostBracket[] = [
   { fromKwp: 50, eurPerKwpLow: 750, eurPerKwpHigh: 950 },
   { fromKwp: 200, eurPerKwpLow: 650, eurPerKwpHigh: 850 },
   { fromKwp: 500, eurPerKwpLow: 600, eurPerKwpHigh: 750 },
+  { fromKwp: 1000, eurPerKwpLow: 550, eurPerKwpHigh: 680 },
 ];
 
 export const OVERHEADS: CostOverhead[] = [
   { id: "engineering", label: "Ingeniería", low: 1500, high: 3500, minKwp: 0 },
   { id: "legal", label: "Legalización y permisos", low: 1500, high: 4000, minKwp: 0 },
-  { id: "ct", label: "Centro de transformación / MT", low: 80000, high: 150000, minKwp: 100 },
+  // CT/MT escala con kWp por encima de 100 kWp (cabina + transformador + protecciones).
+  {
+    id: "ct",
+    label: "Centro de transformación / MT",
+    low: 60000,
+    high: 100000,
+    minKwp: 100,
+    perKwpLow: 70,
+    perKwpHigh: 130,
+  },
 ];
 
-/** Precio de la electricidad asumido cuando no se ha subido factura. */
-const DEFAULT_TARIFF_EUR_PER_KWH = 0.18;
+/**
+ * Tarifa eléctrica estimada por tamaño de instalación cuando no hay
+ * factura. Sólo es un proxy: a más kWp, instalación más industrial y
+ * cliente con tarifa más baja por la economía de escala.
+ */
+function defaultTariffByKwp(kwp: number): number {
+  if (kwp < 15) return 0.18;   // doméstico / PVPC
+  if (kwp < 100) return 0.16;  // PyME pequeña
+  if (kwp < 500) return 0.13;  // industrial mediano
+  if (kwp < 1500) return 0.11; // gran industrial
+  return 0.095;                // gran consumidor
+}
+
+/**
+ * Ratio de autoconsumo: porcentaje de la generación que efectivamente
+ * cubre demanda interna en lugar de verterse a red.
+ *
+ * Sin factura: heurística por tamaño (cuanto más grande la planta,
+ * menos probable que la demanda interna absorba todo).
+ *
+ * Con factura: se capa por la demanda real del cliente (no se puede
+ * autoconsumir más de lo que consumes). Aun con demanda muy alta,
+ * tope realista de 0,65 porque el sol no genera de noche.
+ */
+function selfConsumptionRatio(
+  kwp: number,
+  annualConsumptionKwh: number | undefined,
+  yearlyKwh: number,
+): number {
+  if (annualConsumptionKwh && annualConsumptionKwh > 0 && yearlyKwh > 0) {
+    const demandRatio = annualConsumptionKwh / yearlyKwh;
+    // Como el consumo se reparte 24h y la generación sólo en horas solares,
+    // incluso con demanda igual a la generación sólo ~60-65% es autoconsumida.
+    return Math.min(0.65, demandRatio * 0.6);
+  }
+  if (kwp < 15) return 0.65;   // doméstico con baterías o consumo diurno
+  if (kwp < 50) return 0.6;    // PyME pequeña
+  if (kwp < 200) return 0.5;   // PyME mediana
+  if (kwp < 500) return 0.42;  // industrial
+  if (kwp < 1500) return 0.35; // gran industrial
+  return 0.3;                  // gran consumidor sobredimensionado
+}
+
+/** Precio de venta de excedentes (compensación simplificada). */
+const EXCEDENT_PRICE_EUR_PER_KWH = 0.04;
 
 export type CostEstimate = {
   installationLow: number;
@@ -64,7 +128,9 @@ export type ProfitabilityEstimate = {
   paybackYearsLow: number;
   paybackYearsHigh: number;
   tariffEurPerKwh: number;
-  tariffSource: "factura" | "estimado";
+  tariffSource: "factura" | "estimado-por-tamano";
+  selfConsumptionRatio: number;
+  selfConsumptionSource: "factura" | "estimado-por-tamano";
 };
 
 function pickBracket(kwp: number): CostBracket {
@@ -87,9 +153,12 @@ export function estimateCost(peakPowerKwp: number): CostEstimate | null {
   let overheadHigh = 0;
   for (const o of OVERHEADS) {
     if (o.minKwp !== undefined && peakPowerKwp < o.minKwp) continue;
-    overheads.push({ label: o.label, low: o.low, high: o.high });
-    overheadLow += o.low;
-    overheadHigh += o.high;
+    const extraKwp = o.minKwp !== undefined ? Math.max(0, peakPowerKwp - o.minKwp) : 0;
+    const low = o.low + extraKwp * (o.perKwpLow ?? 0);
+    const high = o.high + extraKwp * (o.perKwpHigh ?? 0);
+    overheads.push({ label: o.label, low: Math.round(low), high: Math.round(high) });
+    overheadLow += low;
+    overheadHigh += high;
   }
 
   return {
@@ -108,26 +177,42 @@ export function estimateProfitability(
 ): ProfitabilityEstimate | null {
   if (!Number.isFinite(yearlyKwh) || yearlyKwh <= 0) return null;
 
-  let tariffEurPerKwh = DEFAULT_TARIFF_EUR_PER_KWH;
-  let tariffSource: ProfitabilityEstimate["tariffSource"] = "estimado";
+  // ---- Tarifa eléctrica ----
+  // Inferimos kWp aproximado desde la inversión para los defaults.
+  // En la práctica este valor llega indirectamente vía `cost` (mid = ~kwp * tarifa media).
+  // Pero para mayor precisión usamos el ratio yearlyKwh / specificYield≈1300 como proxy.
+  const kwpProxy = yearlyKwh / 1300;
+  let tariffEurPerKwh = defaultTariffByKwp(kwpProxy);
+  let tariffSource: ProfitabilityEstimate["tariffSource"] = "estimado-por-tamano";
   if (
     bill?.totalEur &&
     bill?.periodConsumptionKwh &&
     bill.periodConsumptionKwh > 0
   ) {
     const t = bill.totalEur / bill.periodConsumptionKwh;
-    // Saneamos: precios típicos entre 0,08 y 0,40 €/kWh
+    // Saneamos: precios típicos entre 0,05 y 0,40 €/kWh.
     if (t >= 0.05 && t <= 0.6) {
       tariffEurPerKwh = t;
       tariffSource = "factura";
     }
   }
 
-  // Asumimos 80% de autoconsumo real (resto compensado a 50% de la tarifa).
-  const selfConsumed = yearlyKwh * 0.8;
-  const compensated = yearlyKwh * 0.2 * 0.5;
-  const effectiveKwhEquivalent = selfConsumed + compensated;
-  const annualSavings = effectiveKwhEquivalent * tariffEurPerKwh;
+  // ---- Ratio de autoconsumo ----
+  const ratio = selfConsumptionRatio(
+    kwpProxy,
+    bill?.estimatedAnnualKwh,
+    yearlyKwh,
+  );
+  const selfConsumptionFromFactura =
+    !!bill?.estimatedAnnualKwh && bill.estimatedAnnualKwh > 0;
+
+  // ---- Ahorro anual ----
+  const selfConsumedKwh = yearlyKwh * ratio;
+  const surplusKwh = yearlyKwh - selfConsumedKwh;
+  const annualSavings =
+    selfConsumedKwh * tariffEurPerKwh + surplusKwh * EXCEDENT_PRICE_EUR_PER_KWH;
+
+  if (annualSavings <= 0) return null;
 
   return {
     annualSavingsLow: Math.round(annualSavings * 0.9),
@@ -136,5 +221,9 @@ export function estimateProfitability(
     paybackYearsHigh: Number((cost.totalHigh / (annualSavings * 0.9)).toFixed(1)),
     tariffEurPerKwh,
     tariffSource,
+    selfConsumptionRatio: ratio,
+    selfConsumptionSource: selfConsumptionFromFactura
+      ? "factura"
+      : "estimado-por-tamano",
   };
 }

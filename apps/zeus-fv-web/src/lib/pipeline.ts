@@ -11,7 +11,27 @@ export async function loadBuildingFor(ref: string) {
     const data = (await res.json()) as {
       polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon;
     };
-    if (data?.polygon) setState({ buildingGeometry: data.polygon });
+    if (!data?.polygon) return;
+    setState({ buildingGeometry: data.polygon });
+
+    // Auto-recortar a la huella del edificio cuando es razonable.
+    // - Si la huella cubre <95% del polígono activo → vale la pena recortar
+    //   (sobrarían patios, viales, jardín que no son cubierta utilizable).
+    // - Si la huella es <15% del polígono → probable ruido catastral; no
+    //   forzamos el recorte (el usuario puede pulsar el botón manual).
+    const s = getState();
+    if (!s.parcelGeometry) return;
+    try {
+      const parcelArea = turf.area(turf.feature(s.parcelGeometry));
+      const buildingArea = turf.area(turf.feature(data.polygon));
+      if (parcelArea <= 0 || buildingArea <= 0) return;
+      const ratio = buildingArea / parcelArea;
+      if (ratio >= 0.15 && ratio <= 0.95) {
+        clipParcelToBuilding();
+      }
+    } catch {
+      // si turf falla, dejamos al usuario decidir manualmente
+    }
   } catch {
     // sin huella → seguimos con la parcela completa
   }

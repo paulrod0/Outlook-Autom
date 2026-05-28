@@ -536,11 +536,20 @@ function EconomicsSection({
             digits={1}
           />
           <p className="rounded-md bg-slate-800/50 px-2 py-1.5 text-[10px] leading-tight text-slate-400">
-            Tarifa eléctrica usada: {fmt(profitability.tariffEurPerKwh, 3)}{" "}
-            €/kWh ({profitability.tariffSource === "factura"
+            Tarifa eléctrica: {fmt(profitability.tariffEurPerKwh, 3)} €/kWh{" "}
+            ({profitability.tariffSource === "factura"
               ? "deducida de la factura"
-              : "estimada"}
-            ). Asume 80 % autoconsumo y 20 % compensado a media tarifa.
+              : "estimada por tamaño"}
+            ) · Autoconsumo: {fmt(profitability.selfConsumptionRatio * 100, 0)} %{" "}
+            ({profitability.selfConsumptionSource === "factura"
+              ? "capado por demanda real"
+              : "estimado por tamaño"}
+            ). Excedentes se compensan a 0,04 €/kWh.
+            {profitability.tariffSource !== "factura" && (
+              <span className="mt-1 block text-amber-300">
+                ⚠ Sube la factura del cliente para tarifa y autoconsumo realistas.
+              </span>
+            )}
           </p>
         </>
       )}

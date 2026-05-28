@@ -10,7 +10,6 @@ export const BRAND = {
   appName: "Eficiencia",
   companyName: "Grupo Optimus",
   tagline: "Adaptamos tu mundo a un futuro sostenible",
-  claim: "energía · solar · fibra · móvil",
   website: "www.grupo-optimus.com",
   email: "info@grupo-optimus.com",
   phone: "900 525 750",

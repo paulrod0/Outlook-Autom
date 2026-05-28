@@ -32,7 +32,7 @@ export default function Home() {
               <h1 className="text-xl font-semibold">{BRAND.appName}</h1>
             </div>
           </div>
-          <p className="hidden text-xs text-slate-400 sm:block">{BRAND.claim}</p>
+          <p className="hidden text-xs text-slate-400 sm:block">{BRAND.tagline}</p>
         </header>
 
         <section className="mt-12">

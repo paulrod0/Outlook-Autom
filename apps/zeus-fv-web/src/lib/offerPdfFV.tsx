@@ -298,9 +298,7 @@ function CoverPage({ project }: { project: ProjectState }) {
           )}
         </View>
 
-        <Text style={[s.coverClaim, { textAlign: "center" }]}>
-          {BRAND.claim}
-        </Text>
+        <View />
       </View>
     </Page>
   );

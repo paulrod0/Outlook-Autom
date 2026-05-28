@@ -3,11 +3,11 @@ import { XMLParser } from "fast-xml-parser";
 /**
  * Cliente de la Sede Electrónica del Catastro (España).
  *
- * Servicios:
- *  - OVCCoordenadas.asmx/Consulta_RCCOOR
- *      (x, y, SRS) → referencia catastral del inmueble en ese punto.
- *  - WFS INSPIRE Cadastral Parcels
- *      refcat → polígono y superficie de la parcela.
+ * Para localizar la parcela en un punto se usa el WFS INSPIRE
+ * `wfsCP.aspx` con un bbox diminuto alrededor del punto. El antiguo
+ * endpoint `OVCCoordenadas.asmx` deja de responder a peticiones desde
+ * funciones serverless de Vercel (probable bloqueo del WAF a `.asmx`
+ * desde IPs de cloud) — el INSPIRE WFS sí responde.
  *
  * Las llamadas se hacen en servidor (Route Handlers) para:
  *  - poner User-Agent (Catastro rechaza peticiones sin UA reconocible),
@@ -16,10 +16,7 @@ import { XMLParser } from "fast-xml-parser";
  */
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; ZeusFVApp/0.1; +https://zeusenergia.com)";
-
-const OVC_COORDENADAS =
-  "https://ovc.catastro.meh.es/ovcservweb/OVCSWLocalizacionRC/OVCCoordenadas.asmx/Consulta_RCCOOR";
+  "Mozilla/5.0 (compatible; EficienciaApp/0.1; +https://grupo-optimus.com)";
 
 const WFS_INSPIRE = "https://ovc.catastro.meh.es/INSPIRE/wfsCP.aspx";
 const WFS_INSPIRE_BU = "https://ovc.catastro.meh.es/INSPIRE/wfsBU.aspx";
@@ -44,14 +41,45 @@ const parser = new XMLParser({
   removeNSPrefix: true, // strip gml:, cp:, etc.
 });
 
+/**
+ * Localiza la parcela catastral en un punto (lat, lon).
+ *
+ * Implementado con WFS GetFeature + bbox diminuto en lugar del antiguo
+ * OVCCoordenadas.asmx (que está bloqueado para tráfico de Vercel). La
+ * misma llamada nos devuelve refcat + geometría, así que también
+ * exponemos `parcelByPoint` para flujos que quieran ahorrarse la
+ * segunda llamada a `parcelByRef`.
+ */
 export async function refByPoint(
   lat: number,
   lon: number,
 ): Promise<{ reference: string; address?: string } | null> {
-  const url = new URL(OVC_COORDENADAS);
-  url.searchParams.set("Coordenada_X", lon.toString());
-  url.searchParams.set("Coordenada_Y", lat.toString());
-  url.searchParams.set("SRS", "EPSG:4326");
+  const parcel = await parcelByPoint(lat, lon);
+  return parcel ? { reference: parcel.reference } : null;
+}
+
+export async function parcelByPoint(
+  lat: number,
+  lon: number,
+): Promise<CadastralParcel | null> {
+  // Bbox de ~3 m alrededor del punto (1e-5 grados ≈ 1 m).
+  const delta = 1.5e-5;
+  const lat1 = lat - delta;
+  const lon1 = lon - delta;
+  const lat2 = lat + delta;
+  const lon2 = lon + delta;
+
+  const url = new URL(WFS_INSPIRE);
+  url.searchParams.set("service", "WFS");
+  url.searchParams.set("version", "2.0.0");
+  url.searchParams.set("request", "GetFeature");
+  url.searchParams.set("typenames", "cp:CadastralParcel");
+  url.searchParams.set("srsname", "EPSG:4326");
+  // bbox en orden lat,lon (axis order de EPSG:4326 en WFS 2.0).
+  url.searchParams.set(
+    "bbox",
+    `${lat1},${lon1},${lat2},${lon2},urn:ogc:def:crs:EPSG::4326`,
+  );
 
   const res = await fetch(url, {
     headers: { "User-Agent": USER_AGENT, Accept: "application/xml" },
@@ -59,19 +87,41 @@ export async function refByPoint(
   if (!res.ok) return null;
 
   const xml = await res.text();
-  const doc = parser.parse(xml) as ConsultaCoordenadasDoc;
+  const doc = parser.parse(xml) as FeatureCollectionDoc;
+  const members = ensureArray(doc?.FeatureCollection?.member);
+  if (members.length === 0) return null;
 
-  const coord = doc?.consulta_coordenadas?.coordenadas?.coord;
-  if (!coord) return null;
+  for (const m of members) {
+    const cp = m?.CadastralParcel;
+    if (!cp) continue;
+    const ref = extractRefcat(cp);
+    if (!ref) continue;
+    const polygon = gmlMultiSurfaceToGeoJson(cp.geometry?.MultiSurface);
+    if (!polygon) continue;
+    const areaM2 = numberOrUndefined(extractAreaValue(cp.areaValue));
+    return {
+      reference: ref,
+      areaM2,
+      polygon,
+      source: "catastro-wfs",
+    };
+  }
+  return null;
+}
 
-  const pc1 = coord.pc?.pc1;
-  const pc2 = coord.pc?.pc2;
-  if (!pc1 || !pc2) return null;
-
-  return {
-    reference: `${pc1}${pc2}`,
-    address: coord.ldt,
-  };
+function extractRefcat(cp: CadastralParcelNode): string | undefined {
+  const ncr = cp.nationalCadastralReference;
+  if (typeof ncr === "string") return ncr.trim();
+  if (ncr && typeof ncr === "object" && "#text" in ncr) {
+    return String(ncr["#text"]).trim();
+  }
+  // Fallback: extraer del gml:id (ES.SDGC.CP.{refcat}).
+  const id = cp["@_gml:id"] ?? cp["@_id"];
+  if (id) {
+    const m = String(id).match(/(?:ES\.SDGC\.CP\.)?([0-9A-Z]{14,20})/);
+    if (m) return m[1];
+  }
+  return undefined;
 }
 
 export async function parcelByRef(
@@ -100,10 +150,8 @@ export async function parcelByRef(
   const xml = await res.text();
   const doc = parser.parse(xml) as FeatureCollectionDoc;
 
-  const member = doc?.FeatureCollection?.member;
-  if (!member) return null;
-
-  const parcel = member.CadastralParcel;
+  const members = ensureArray(doc?.FeatureCollection?.member);
+  const parcel = members.find((m) => m?.CadastralParcel)?.CadastralParcel;
   if (!parcel) return null;
 
   const areaM2 = numberOrUndefined(extractAreaValue(parcel.areaValue));
@@ -282,26 +330,22 @@ function numberOrUndefined(value: unknown): number | undefined {
 
 // --- Tipos crudos del parser (no exhaustivos, sólo lo que usamos) ---
 
-type ConsultaCoordenadasDoc = {
-  consulta_coordenadas?: {
-    coordenadas?: {
-      coord?: {
-        pc?: { pc1?: string; pc2?: string };
-        ldt?: string;
-      };
-    };
+type FeatureCollectionDoc = {
+  FeatureCollection?: {
+    member?: FeatureCollectionMember | FeatureCollectionMember[];
   };
 };
 
-type FeatureCollectionDoc = {
-  FeatureCollection?: {
-    member?: {
-      CadastralParcel?: {
-        areaValue?: { "#text"?: string | number } | string | number;
-        geometry?: { MultiSurface?: MultiSurfaceNode };
-      };
-    };
-  };
+type FeatureCollectionMember = {
+  CadastralParcel?: CadastralParcelNode;
+};
+
+type CadastralParcelNode = {
+  areaValue?: { "#text"?: string | number } | string | number;
+  geometry?: { MultiSurface?: MultiSurfaceNode };
+  nationalCadastralReference?: string | { "#text"?: string };
+  "@_gml:id"?: string;
+  "@_id"?: string;
 };
 
 type PosListNode = string | { "#text"?: string };

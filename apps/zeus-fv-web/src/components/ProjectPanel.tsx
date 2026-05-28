@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { BRAND, PRODUCTS } from "@/lib/branding";
 import { DEFAULT_PANELS } from "@/lib/panelLayout";
 import { estimateCost, estimateProfitability } from "@/lib/economics";
 import {
@@ -42,15 +43,16 @@ export function ProjectPanel() {
     return () => clearTimeout(id);
   }, [s.panel, s.tiltDeg, s.azimuthDeg, s.edgeMarginM, s.ceLimit, s.parcelGeometry]);
 
+  const productLabel = PRODUCTS[s.productType]?.name ?? "Fotovoltaica";
   return (
-    <aside className="flex flex-1 flex-col gap-4 border-t border-white/10 bg-zeus-panel p-4 md:h-full md:min-h-0 md:overflow-y-auto md:border-l md:border-t-0 md:p-5">
+    <aside className="flex flex-1 flex-col gap-4 border-t border-white/10 bg-optimus-navy p-4 md:h-full md:min-h-0 md:overflow-y-auto md:border-l md:border-t-0 md:p-5">
       <header className="flex items-center gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-md bg-zeus-green/20 text-zeus-green">
-          <BoltIcon />
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-optimus-cyan font-bold text-optimus-navyDeep">
+          G
         </div>
         <div>
-          <h1 className="text-base font-semibold">Zeus FV</h1>
-          <p className="text-xs text-slate-400">Diseñador de plantas FV</p>
+          <h1 className="text-base font-semibold">{BRAND.appName}</h1>
+          <p className="text-xs text-optimus-cyanLight">{productLabel}</p>
         </div>
       </header>
 
@@ -173,22 +175,206 @@ export function ProjectPanel() {
         />
       )}
 
+      {s.productType === "ppa" && <PPASection ppa={s.ppa} />}
+      {s.productType === "ce" && <CESection ce={s.ce} />}
+
+      <CommissionSection
+        commercialName={s.commercialName}
+        commissionEur={s.commissionEur}
+      />
+
+      <StructuralSection structural={s.structural} />
+
       <SavedProjectsSection canSave={!!s.parcelGeometry} />
 
-      <button
-        type="button"
-        onClick={() => void downloadOffer()}
-        disabled={!s.layout || !s.pvgis}
-        className="rounded-md bg-zeus-green/90 px-3 py-2 text-sm font-medium text-slate-900 hover:bg-zeus-green disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Descargar oferta (PDF)
-      </button>
+      <div className="flex flex-col gap-2">
+        <button
+          type="button"
+          onClick={() => void downloadOffer(s.productType)}
+          disabled={!s.layout || !s.pvgis}
+          className="rounded-md bg-optimus-cyan px-3 py-2 text-sm font-medium text-optimus-navyDeep hover:bg-optimus-cyanDark hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Descargar oferta {productLabel} (PDF)
+        </button>
+        <button
+          type="button"
+          onClick={() => void downloadInforme()}
+          disabled={!s.layout || !s.pvgis}
+          className="rounded-md bg-white/10 px-3 py-2 text-sm font-medium text-slate-100 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Descargar informe técnico
+        </button>
+      </div>
 
-      <footer className="mt-auto rounded-md bg-slate-800/60 p-3 text-[11px] leading-relaxed text-slate-400">
+      <footer className="mt-auto rounded-md bg-optimus-navyDeep/60 p-3 text-[11px] leading-relaxed text-slate-400">
         Click sobre la cubierta · Editar polígono o añadir zonas de exclusión ·
         Guarda y descarga la oferta cuando los números cuadren.
       </footer>
     </aside>
+  );
+}
+
+function PPASection({ ppa }: { ppa: ReturnType<typeof useProjectState>["ppa"] }) {
+  return (
+    <Section title="Contrato PPA">
+      <NumberField
+        label="Precio energía (€/kWh)"
+        value={ppa.energyPriceEurKwh}
+        min={0.03}
+        max={0.2}
+        step={0.001}
+        onChange={(energyPriceEurKwh) =>
+          setState({ ppa: { ...ppa, energyPriceEurKwh } })
+        }
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <NumberField
+          label="Duración (años)"
+          value={ppa.contractYears}
+          min={5}
+          max={30}
+          step={1}
+          onChange={(contractYears) => setState({ ppa: { ...ppa, contractYears } })}
+        />
+        <NumberField
+          label="Indexación (%)"
+          value={ppa.indexationPct}
+          min={0}
+          max={10}
+          step={0.1}
+          onChange={(indexationPct) => setState({ ppa: { ...ppa, indexationPct } })}
+        />
+      </div>
+    </Section>
+  );
+}
+
+function CESection({ ce }: { ce: ReturnType<typeof useProjectState>["ce"] }) {
+  return (
+    <Section title="Comunidad Energética — Contrato">
+      <SelectField
+        label="Opción contractual"
+        value={String(ce.optionYears)}
+        onChange={(v) =>
+          setState({ ce: { ...ce, optionYears: Number(v) as 20 | 25 | 30 } })
+        }
+        options={[
+          { value: "20", label: "20 años" },
+          { value: "25", label: "25 años" },
+          { value: "30", label: "30 años" },
+        ]}
+      />
+    </Section>
+  );
+}
+
+function CommissionSection({
+  commercialName,
+  commissionEur,
+}: {
+  commercialName: string;
+  commissionEur: number;
+}) {
+  return (
+    <Section title="Comisión / Comercial">
+      <Field
+        label="Comercial responsable"
+        value={commercialName}
+        onChange={(v) => setState({ commercialName: v })}
+        placeholder="Nombre y apellidos"
+      />
+      <NumberField
+        label="Comisión (€)"
+        value={commissionEur}
+        min={0}
+        step={50}
+        onChange={(commissionEur) => setState({ commissionEur })}
+      />
+    </Section>
+  );
+}
+
+function StructuralSection({
+  structural,
+}: {
+  structural: ReturnType<typeof useProjectState>["structural"];
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const onPick = async (file: File) => {
+    setError(null);
+    if (file.size > 5 * 1024 * 1024) {
+      setError("El archivo supera los 5 MB.");
+      return;
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result as string);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+    setState({
+      structural: {
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        dataUrl,
+      },
+    });
+  };
+
+  return (
+    <Section title="Estudio estructural">
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf,.dwg,.dxf,image/*"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void onPick(f);
+          e.target.value = "";
+        }}
+      />
+      {structural ? (
+        <div className="space-y-1.5 rounded-md bg-optimus-navyDeep/60 px-2 py-2 text-xs text-slate-200">
+          <p className="truncate font-medium">{structural.name}</p>
+          <p className="text-[10px] text-slate-400">
+            {(structural.sizeBytes / 1024).toFixed(0)} KB · {structural.mimeType}
+          </p>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              className="flex-1 rounded bg-white/10 px-2 py-1 text-[11px] hover:bg-white/15"
+            >
+              Reemplazar
+            </button>
+            <button
+              type="button"
+              onClick={() => setState({ structural: null })}
+              className="flex-1 rounded bg-rose-500/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-500/30"
+            >
+              Quitar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="w-full rounded-md bg-optimus-navyDeep/60 px-3 py-2 text-xs font-medium text-slate-200 ring-1 ring-white/10 hover:bg-optimus-navyDeep"
+        >
+          Subir estudio estructural (PDF / DWG / imagen, &lt;5 MB)
+        </button>
+      )}
+      {error && (
+        <p className="rounded-md bg-rose-500/15 px-2 py-1.5 text-[11px] text-rose-300">
+          {error}
+        </p>
+      )}
+    </Section>
   );
 }
 
@@ -712,25 +898,52 @@ function SavedProjectsSection({ canSave }: { canSave: boolean }) {
   );
 }
 
-async function downloadOffer() {
-  const { generateOfferBlob } = await import("@/lib/offerPdf");
-  const project = (await import("@/lib/store")).getState();
-
-  // Captura el canvas del mapa si existe.
+function captureMapImage(): string | undefined {
   const canvas = document.querySelector(
     ".maplibregl-canvas",
   ) as HTMLCanvasElement | null;
-  const mapImage = canvas ? canvas.toDataURL("image/png") : undefined;
+  return canvas ? canvas.toDataURL("image/png") : undefined;
+}
 
-  const blob = await generateOfferBlob(project, mapImage);
+function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `oferta-zeus-${project.reference ?? "fv"}.pdf`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+async function downloadOffer(productType: "fv" | "ce" | "ppa") {
+  const project = (await import("@/lib/store")).getState();
+  const mapImage = captureMapImage();
+  let blob: Blob;
+  let prefix: string;
+  if (productType === "ce") {
+    const { generateCEOfferBlob } = await import("@/lib/offerPdfCE");
+    blob = await generateCEOfferBlob(project, mapImage);
+    prefix = "oferta-ce";
+  } else if (productType === "ppa") {
+    const { generatePPAOfferBlob } = await import("@/lib/offerPdfPPA");
+    blob = await generatePPAOfferBlob(project, mapImage);
+    prefix = "oferta-ppa";
+  } else {
+    const { generateFVOfferBlob } = await import("@/lib/offerPdfFV");
+    blob = await generateFVOfferBlob(project, mapImage);
+    prefix = "oferta-fv";
+  }
+  const slug = project.reference ?? (project.clientName.replace(/\s+/g, "_") || "optimus");
+  triggerDownload(blob, `${prefix}-${slug}.pdf`);
+}
+
+async function downloadInforme() {
+  const { generateInformeBlob } = await import("@/lib/informePdf");
+  const project = (await import("@/lib/store")).getState();
+  const mapImage = captureMapImage();
+  const blob = await generateInformeBlob(project, mapImage);
+  triggerDownload(blob, `informe-tecnico-${project.reference ?? "optimus"}.pdf`);
 }
 
 async function loadByRef(ref: string) {

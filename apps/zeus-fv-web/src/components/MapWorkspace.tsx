@@ -43,6 +43,7 @@ export function MapWorkspace() {
   const [drawMode, setDrawMode] = useState(false);
   const [obstacleMode, setObstacleMode] = useState(false);
   const [drawPointCount, setDrawPointCount] = useState(0);
+  const [view3D, setView3D] = useState(false);
   const project = useProjectState();
 
   useEffect(() => {
@@ -92,6 +93,19 @@ export function MapWorkspace() {
           "fill-opacity": 0.12,
         },
       });
+      // Vista 3D del polígono: paredes hasta una altura de 4 m.
+      map.addLayer({
+        id: "parcel-3d",
+        type: "fill-extrusion",
+        source: PARCEL_SOURCE,
+        layout: { visibility: "none" },
+        paint: {
+          "fill-extrusion-color": "#e2e8f0",
+          "fill-extrusion-height": 4,
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.85,
+        },
+      });
       map.addLayer({
         id: "parcel-line",
         type: "line",
@@ -128,6 +142,19 @@ export function MapWorkspace() {
         paint: {
           "fill-color": "#1d4ed8",
           "fill-opacity": 0.85,
+        },
+      });
+      // Vista 3D: extrusión de cada panel a altura proporcional al tilt.
+      map.addLayer({
+        id: "panels-3d",
+        type: "fill-extrusion",
+        source: PANELS_SOURCE,
+        layout: { visibility: "none" },
+        paint: {
+          "fill-extrusion-color": "#1d4ed8",
+          "fill-extrusion-height": ["coalesce", ["get", "extrusionHeight"], 0.6],
+          "fill-extrusion-base": 0.0,
+          "fill-extrusion-opacity": 0.9,
         },
       });
       map.addLayer({
@@ -384,11 +411,36 @@ export function MapWorkspace() {
     const panelsSrc = map.getSource(PANELS_SOURCE) as maplibregl.GeoJSONSource | undefined;
     if (!panelsSrc) return;
 
+    // Para la vista 3D, añadimos al panel una "altura de extrusión" que
+    // depende del tilt activo: tilt=0 → 0,1 m; tilt=30 → ~1,1 m.
+    const tilt = project.tiltDeg ?? 15;
+    const extrusionHeight = 0.1 + (tilt / 30) * 1.0;
+    const panels = (project.layout?.panels ?? []).map((f) => ({
+      ...f,
+      properties: { ...(f.properties ?? {}), extrusionHeight },
+    }));
     panelsSrc.setData({
       type: "FeatureCollection",
-      features: project.layout?.panels ?? [],
+      features: panels,
     });
-  }, [project.layout, ready]);
+  }, [project.layout, project.tiltDeg, ready]);
+
+  // Alternar entre vista 2D (cenital) y 3D (perspectiva con extrusión).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    if (view3D) {
+      map.easeTo({ pitch: 55, bearing: -20, duration: 600 });
+      map.setLayoutProperty("parcel-3d", "visibility", "visible");
+      map.setLayoutProperty("panels-3d", "visibility", "visible");
+      map.setLayoutProperty("panels-fill", "visibility", "none");
+    } else {
+      map.easeTo({ pitch: 0, bearing: 0, duration: 400 });
+      map.setLayoutProperty("parcel-3d", "visibility", "none");
+      map.setLayoutProperty("panels-3d", "visibility", "none");
+      map.setLayoutProperty("panels-fill", "visibility", "visible");
+    }
+  }, [view3D, ready]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -436,7 +488,22 @@ export function MapWorkspace() {
         </p>
       </div>
       {canEdit && (
-        <div className="absolute bottom-16 right-3 z-10 flex w-44 flex-col gap-2 md:bottom-auto md:right-4 md:top-4 md:w-52">
+        <>
+          <div className="absolute right-3 top-3 z-10 md:right-4 md:top-4">
+            <button
+              type="button"
+              onClick={() => setView3D((v) => !v)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium shadow ring-1 ring-white/10 ${
+                view3D
+                  ? "bg-optimus-cyan text-optimus-navyDeep"
+                  : "bg-optimus-navy/95 text-slate-100 hover:bg-optimus-navy"
+              }`}
+              title={view3D ? "Volver a 2D" : "Vista 3D"}
+            >
+              {view3D ? "2D" : "3D"}
+            </button>
+          </div>
+        <div className="absolute bottom-16 right-3 z-10 flex w-44 flex-col gap-2 md:bottom-auto md:right-4 md:top-14 md:w-52">
           {project.buildingGeometry && (
             <button
               type="button"
@@ -551,6 +618,7 @@ export function MapWorkspace() {
               </button>
             )}
         </div>
+        </>
       )}
       {project.status !== "idle" && (
         <div className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-md bg-zeus-panel/95 px-4 py-2 text-xs text-slate-200 shadow ring-1 ring-white/10">

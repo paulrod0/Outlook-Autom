@@ -25,6 +25,21 @@ export type StructuralAttachment = {
   dataUrl: string;
 };
 
+/**
+ * Un faldón (roof plane). Permite modelar cubiertas con varias pendientes
+ * (casa a 4 aguas, nave con dos pendientes). Cuando hay ≥ 1 faldón el
+ * cálculo ignora parcelGeometry y suma la producción de todos.
+ */
+export type RoofPlane = {
+  id: string;
+  label: string;
+  polygon: GeoJSON.Polygon;
+  tiltDeg: number;
+  azimuthDeg: number;
+  obstacles: GeoJSON.Polygon[];
+  enabled: boolean;
+};
+
 export type ProjectState = {
   productType: ProductType;
   clientName: string;
@@ -47,6 +62,12 @@ export type ProjectState = {
   columnGapM: number;
   /** Lista de obstáculos sobre la cubierta (skylights, HVAC, chimeneas). */
   obstacles: GeoJSON.Polygon[];
+  /**
+   * Lista de faldones (roof planes). Si está vacía, la app usa el modo
+   * legacy (un único polígono = parcelGeometry con tilt/azimut globales).
+   * Si tiene ≥ 1 elemento, el cálculo suma producción por faldón.
+   */
+  roofPlanes: RoofPlane[];
   ceLimit: boolean; // si true, aplica el máx 130 kWp por refcat (Fase 1)
   communityMembers: CommunityMember[];
   bill: BillSummary | null;
@@ -91,6 +112,7 @@ const initialState: ProjectState = {
   rowSpacingOverrideM: null,
   columnGapM: 0,
   obstacles: [],
+  roofPlanes: [],
   ceLimit: false,
   communityMembers: [],
   bill: null,
@@ -169,6 +191,59 @@ export function removeObstacle(index: number): void {
 export function clearObstacles(): void {
   if (state.obstacles.length === 0) return;
   setState({ obstacles: [] });
+}
+
+function newPlaneId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).slice(2);
+}
+
+/** Convierte la cubierta actual en faldón #1 con los parámetros globales. */
+export function promoteToRoofPlane(): void {
+  if (!state.parcelGeometry || state.parcelGeometry.type !== "Polygon") return;
+  if (state.roofPlanes.length > 0) return;
+  const plane: RoofPlane = {
+    id: newPlaneId(),
+    label: "Faldón 1",
+    polygon: state.parcelGeometry,
+    tiltDeg: state.tiltDeg,
+    azimuthDeg: state.azimuthDeg,
+    obstacles: state.obstacles,
+    enabled: true,
+  };
+  setState({ roofPlanes: [plane] });
+}
+
+export function addRoofPlane(polygon: GeoJSON.Polygon, label?: string): void {
+  const plane: RoofPlane = {
+    id: newPlaneId(),
+    label: label ?? `Faldón ${state.roofPlanes.length + 1}`,
+    polygon,
+    tiltDeg: state.tiltDeg,
+    azimuthDeg: state.azimuthDeg,
+    obstacles: [],
+    enabled: true,
+  };
+  setState({ roofPlanes: [...state.roofPlanes, plane] });
+}
+
+export function updateRoofPlane(id: string, partial: Partial<RoofPlane>): void {
+  setState({
+    roofPlanes: state.roofPlanes.map((p) =>
+      p.id === id ? { ...p, ...partial } : p,
+    ),
+  });
+}
+
+export function removeRoofPlane(id: string): void {
+  setState({ roofPlanes: state.roofPlanes.filter((p) => p.id !== id) });
+}
+
+export function clearRoofPlanes(): void {
+  if (state.roofPlanes.length === 0) return;
+  setState({ roofPlanes: [] });
 }
 
 export function useProjectState(): ProjectState {

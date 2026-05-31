@@ -226,6 +226,15 @@ export function ProjectPanel() {
         />
       )}
 
+      <RoofPlanesSection
+        planes={s.roofPlanes}
+        canPromote={
+          !!s.parcelGeometry &&
+          s.parcelGeometry.type === "Polygon" &&
+          s.roofPlanes.length === 0
+        }
+      />
+
       {s.productType === "ppa" && <PPASection ppa={s.ppa} />}
       {s.productType === "ce" && <CESection ce={s.ce} />}
 
@@ -262,6 +271,135 @@ export function ProjectPanel() {
         Guarda y descarga la oferta cuando los números cuadren.
       </footer>
     </aside>
+  );
+}
+
+function RoofPlanesSection({
+  planes,
+  canPromote,
+}: {
+  planes: ReturnType<typeof useProjectState>["roofPlanes"];
+  canPromote: boolean;
+}) {
+  return (
+    <Section title={`Faldones (${planes.length})`}>
+      {planes.length === 0 ? (
+        <p className="rounded-md bg-optimus-navyDeep/40 px-2 py-2 text-[11px] leading-tight text-slate-400">
+          Modo simple: una cubierta con un tilt + azimut globales.{" "}
+          {canPromote ? (
+            <button
+              type="button"
+              onClick={() => {
+                void import("@/lib/store").then((m) => m.promoteToRoofPlane());
+              }}
+              className="font-medium text-optimus-cyan hover:underline"
+            >
+              Convertir en faldón 1 →
+            </button>
+          ) : (
+            <span>Carga primero una cubierta para empezar a partirla en faldones.</span>
+          )}
+        </p>
+      ) : (
+        <>
+          {planes.map((p) => (
+            <div
+              key={p.id}
+              className="space-y-1.5 rounded-md bg-optimus-navyDeep/40 p-2 ring-1 ring-white/5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <input
+                  type="text"
+                  value={p.label}
+                  onChange={(e) =>
+                    void import("@/lib/store").then((m) =>
+                      m.updateRoofPlane(p.id, { label: e.target.value }),
+                    )
+                  }
+                  className="w-full rounded bg-slate-900/60 px-2 py-1 text-xs font-medium text-slate-100"
+                />
+                <label className="flex items-center gap-1 text-[10px] text-slate-400">
+                  <input
+                    type="checkbox"
+                    checked={p.enabled}
+                    onChange={(e) =>
+                      void import("@/lib/store").then((m) =>
+                        m.updateRoofPlane(p.id, { enabled: e.target.checked }),
+                      )
+                    }
+                    className="accent-optimus-cyan"
+                  />
+                  on
+                </label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void import("@/lib/store").then((m) => m.removeRoofPlane(p.id))
+                  }
+                  className="text-rose-400 hover:text-rose-300"
+                  aria-label="Eliminar faldón"
+                  title="Eliminar faldón"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-[10px] text-slate-400">
+                  Inclinación °
+                  <input
+                    type="number"
+                    value={p.tiltDeg}
+                    min={0}
+                    max={60}
+                    step={1}
+                    onChange={(e) =>
+                      void import("@/lib/store").then((m) =>
+                        m.updateRoofPlane(p.id, {
+                          tiltDeg: parseFloat(e.target.value) || 0,
+                        }),
+                      )
+                    }
+                    className="mt-0.5 w-full rounded bg-slate-900/60 px-2 py-1 text-xs text-slate-100"
+                  />
+                </label>
+                <label className="text-[10px] text-slate-400">
+                  Azimut °
+                  <input
+                    type="number"
+                    value={p.azimuthDeg}
+                    min={0}
+                    max={360}
+                    step={1}
+                    onChange={(e) =>
+                      void import("@/lib/store").then((m) =>
+                        m.updateRoofPlane(p.id, {
+                          azimuthDeg: parseFloat(e.target.value) || 0,
+                        }),
+                      )
+                    }
+                    className="mt-0.5 w-full rounded bg-slate-900/60 px-2 py-1 text-xs text-slate-100"
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() =>
+              void import("@/lib/store").then((m) => m.clearRoofPlanes())
+            }
+            className="w-full rounded-md bg-rose-500/20 px-2 py-1.5 text-[11px] text-rose-200 hover:bg-rose-500/30"
+          >
+            Volver a modo simple (1 cubierta)
+          </button>
+          <p className="text-[10px] text-slate-500 leading-tight">
+            Para añadir más faldones, usa el botón <strong>+ Faldón</strong> sobre
+            el mapa (próxima iteración: drawing tool). Por ahora puedes editar
+            el polígono del faldón actual con &quot;Editar polígono&quot;.
+          </p>
+        </>
+      )}
+    </Section>
   );
 }
 

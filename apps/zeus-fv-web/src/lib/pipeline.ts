@@ -131,8 +131,15 @@ export async function runFromPoint(lat: number, lon: number) {
  */
 export async function runLayoutAndPvgis() {
   const s = getState();
-  if (!s.parcelGeometry || !s.centroid) return;
+  if (!s.centroid) return;
 
+  // Modo multi-faldón: si hay roofPlanes, ignoramos parcelGeometry y
+  // calculamos por faldón sumando producción.
+  if (s.roofPlanes.length > 0) {
+    return runMultiPlaneFlow();
+  }
+
+  if (!s.parcelGeometry) return;
   setState({ status: "computing" });
 
   const layout = computeLayout({
@@ -157,23 +164,13 @@ export async function runLayoutAndPvgis() {
   setState({ status: "loading-pvgis" });
 
   try {
-    const url = new URL("/api/pvgis", window.location.origin);
-    url.searchParams.set("lat", s.centroid.lat.toString());
-    url.searchParams.set("lon", s.centroid.lon.toString());
-    url.searchParams.set("kwp", layout.peakPowerKwp.toString());
-    url.searchParams.set("tilt", s.tiltDeg.toString());
-    // PVGIS aspect: 0 = Sur. Internamente trabajamos con 180 = Sur.
-    url.searchParams.set("azimuth", (s.azimuthDeg - 180).toString());
-    const res = await fetch(url);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error ?? "PVGIS: error");
-    }
-    const pvgis = (await res.json()) as {
-      yearlyKwh: number;
-      specificYield: number;
-      monthlyKwh: number[];
-    };
+    const pvgis = await fetchPvgisOnce({
+      lat: s.centroid.lat,
+      lon: s.centroid.lon,
+      kwp: layout.peakPowerKwp,
+      tiltDeg: s.tiltDeg,
+      azimuthDeg: s.azimuthDeg,
+    });
     setState({ pvgis, status: "ready" });
   } catch (err) {
     setState({
@@ -181,4 +178,150 @@ export async function runLayoutAndPvgis() {
       error: err instanceof Error ? err.message : "PVGIS: error",
     });
   }
+}
+
+/**
+ * Flujo multi-faldón: computa layout para cada plano con su tilt/azimut
+ * propios y agrega resultados (paneles, kWp, producción).
+ */
+async function runMultiPlaneFlow() {
+  const s = getState();
+  if (!s.centroid) return;
+  setState({ status: "computing" });
+
+  const enabled = s.roofPlanes.filter((p) => p.enabled);
+  if (enabled.length === 0) {
+    setState({
+      status: "ready",
+      layout: null,
+      pvgis: null,
+    });
+    return;
+  }
+
+  // Calcular layout por faldón.
+  type PerPlane = {
+    planeId: string;
+    label: string;
+    tiltDeg: number;
+    azimuthDeg: number;
+    panels: GeoJSON.Feature<GeoJSON.Polygon>[];
+    panelCount: number;
+    peakPowerKwp: number;
+    usableAreaM2: number;
+    rowSpacingM: number;
+  };
+  const perPlane: PerPlane[] = [];
+  for (const plane of enabled) {
+    const result = computeLayout({
+      polygon: plane.polygon,
+      panel: s.panel,
+      tiltDeg: plane.tiltDeg,
+      azimuthDeg: plane.azimuthDeg,
+      edgeMarginM: s.edgeMarginM,
+      rowSpacingM: s.rowSpacingOverrideM ?? undefined,
+      columnGapM: s.columnGapM,
+      obstacles: plane.obstacles,
+      maxKwp: s.ceLimit ? 130 / enabled.length : undefined,
+    });
+    perPlane.push({
+      planeId: plane.id,
+      label: plane.label,
+      tiltDeg: plane.tiltDeg,
+      azimuthDeg: plane.azimuthDeg,
+      panels: result.panels,
+      panelCount: result.panelCount,
+      peakPowerKwp: result.peakPowerKwp,
+      usableAreaM2: result.usableAreaM2,
+      rowSpacingM: result.rowSpacingM,
+    });
+  }
+
+  const allPanels = perPlane.flatMap((p) => p.panels);
+  const peakPowerKwp = perPlane.reduce((acc, p) => acc + p.peakPowerKwp, 0);
+  const panelCount = perPlane.reduce((acc, p) => acc + p.panelCount, 0);
+  const usableAreaM2 = perPlane.reduce((acc, p) => acc + p.usableAreaM2, 0);
+  const rowSpacingM = perPlane.length > 0 ? perPlane[0].rowSpacingM : 0;
+
+  setState({
+    layout: {
+      panels: allPanels,
+      panelCount,
+      peakPowerKwp: Number(peakPowerKwp.toFixed(2)),
+      usableAreaM2: Number(usableAreaM2.toFixed(1)),
+      rowSpacingM: Number(rowSpacingM.toFixed(2)),
+      gridRotationDeg: 0,
+    },
+  });
+
+  if (peakPowerKwp <= 0) {
+    setState({ status: "ready", pvgis: null });
+    return;
+  }
+
+  setState({ status: "loading-pvgis" });
+  try {
+    // PVGIS por faldón → suma de kWh anuales y curva mensual agregada.
+    const results = await Promise.all(
+      perPlane
+        .filter((p) => p.peakPowerKwp > 0)
+        .map((p) =>
+          fetchPvgisOnce({
+            lat: s.centroid!.lat,
+            lon: s.centroid!.lon,
+            kwp: p.peakPowerKwp,
+            tiltDeg: p.tiltDeg,
+            azimuthDeg: p.azimuthDeg,
+          }),
+        ),
+    );
+    if (results.length === 0) {
+      setState({ status: "ready", pvgis: null });
+      return;
+    }
+    const yearlyKwh = results.reduce((acc, r) => acc + r.yearlyKwh, 0);
+    const monthlyKwh = Array.from({ length: 12 }).map((_, i) =>
+      results.reduce((acc, r) => acc + (r.monthlyKwh[i] ?? 0), 0),
+    );
+    const specificYield = peakPowerKwp > 0 ? yearlyKwh / peakPowerKwp : 0;
+    setState({
+      pvgis: {
+        yearlyKwh: Math.round(yearlyKwh),
+        specificYield: Math.round(specificYield),
+        monthlyKwh: monthlyKwh.map((v) => Math.round(v)),
+      },
+      status: "ready",
+    });
+  } catch (err) {
+    setState({
+      status: "error",
+      error: err instanceof Error ? err.message : "PVGIS: error",
+    });
+  }
+}
+
+async function fetchPvgisOnce(args: {
+  lat: number;
+  lon: number;
+  kwp: number;
+  tiltDeg: number;
+  azimuthDeg: number;
+}): Promise<{ yearlyKwh: number; specificYield: number; monthlyKwh: number[] }> {
+  const url = new URL("/api/pvgis", window.location.origin);
+  url.searchParams.set("lat", args.lat.toString());
+  url.searchParams.set("lon", args.lon.toString());
+  url.searchParams.set("kwp", args.kwp.toString());
+  url.searchParams.set("tilt", args.tiltDeg.toString());
+  // PVGIS aspect: 0 = Sur. Internamente trabajamos con 180 = Sur.
+  url.searchParams.set("azimuth", (args.azimuthDeg - 180).toString());
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? "PVGIS: error");
+  }
+  return (await res.json()) as {
+    yearlyKwh: number;
+    specificYield: number;
+    monthlyKwh: number[];
+  };
 }

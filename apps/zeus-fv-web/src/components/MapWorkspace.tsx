@@ -574,15 +574,32 @@ export function MapWorkspace() {
                   : "Haz clic sobre una cubierta para cargar la parcela catastral. Si no cuadra, pulsa \"Trazar cubierta manualmente\" o \"Usar OSM\"."}
         </p>
       </div>
-      {/* Botón "Trazar cubierta" disponible siempre, incluso sin parcela cargada */}
-      <div className="absolute right-3 top-14 z-10 flex flex-col gap-2 md:right-4 md:top-16">
+      {/* Columna única de acciones en la esquina superior derecha */}
+      <div className="absolute bottom-16 right-3 z-10 flex w-48 flex-col gap-2 md:bottom-auto md:right-4 md:top-4 md:w-52">
+        {/* Toggle 2D / 3D (siempre visible) */}
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => setView3D((v) => !v)}
+            className={`self-end rounded-md px-3 py-1.5 text-xs font-medium shadow ring-1 ring-white/10 ${
+              view3D
+                ? "bg-optimus-cyan text-optimus-navyDeep"
+                : "bg-optimus-navy/95 text-slate-100 hover:bg-optimus-navy"
+            }`}
+            title={view3D ? "Volver a 2D" : "Vista 3D"}
+          >
+            {view3D ? "Vista 2D" : "Vista 3D"}
+          </button>
+        )}
+
+        {/* Trazado manual de cubierta (disponible siempre) */}
         {roofDrawMode ? (
           <>
             <button
               type="button"
               onClick={() => void finishRoof()}
               disabled={roofDrawPointCount < 3}
-              className="rounded-md bg-zeus-green/90 px-3 py-1.5 text-xs font-medium text-slate-900 shadow ring-1 ring-white/10 hover:bg-zeus-green disabled:opacity-40"
+              className="rounded-md bg-emerald-500 px-3 py-1.5 text-xs font-medium text-slate-900 shadow ring-1 ring-white/10 hover:bg-emerald-400 disabled:opacity-40"
             >
               Cerrar cubierta ({roofDrawPointCount} pts)
             </button>
@@ -609,24 +626,10 @@ export function MapWorkspace() {
             Trazar cubierta manualmente
           </button>
         )}
-      </div>
-      {canEdit && (
-        <>
-          <div className="absolute right-3 top-3 z-10 md:right-4 md:top-4">
-            <button
-              type="button"
-              onClick={() => setView3D((v) => !v)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium shadow ring-1 ring-white/10 ${
-                view3D
-                  ? "bg-optimus-cyan text-optimus-navyDeep"
-                  : "bg-optimus-navy/95 text-slate-100 hover:bg-optimus-navy"
-              }`}
-              title={view3D ? "Volver a 2D" : "Vista 3D"}
-            >
-              {view3D ? "2D" : "3D"}
-            </button>
-          </div>
-        <div className="absolute bottom-16 right-3 z-10 flex w-44 flex-col gap-2 md:bottom-auto md:right-4 md:top-14 md:w-52">
+
+        {/* Resto de acciones — sólo cuando hay parcela cargada */}
+        {canEdit && (
+          <>
           {project.buildingGeometry && (
             <button
               type="button"
@@ -751,9 +754,9 @@ export function MapWorkspace() {
                 Borrar zonas de exclusión
               </button>
             )}
-        </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
       {project.status !== "idle" && (
         <div className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-md bg-zeus-panel/95 px-4 py-2 text-xs text-slate-200 shadow ring-1 ring-white/10">
           <StatusBadge status={project.status} error={project.error} />

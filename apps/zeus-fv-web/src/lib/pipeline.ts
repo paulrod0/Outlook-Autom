@@ -141,6 +141,9 @@ export async function runLayoutAndPvgis() {
     tiltDeg: s.tiltDeg,
     azimuthDeg: s.azimuthDeg,
     edgeMarginM: s.edgeMarginM,
+    rowSpacingM: s.rowSpacingOverrideM ?? undefined,
+    columnGapM: s.columnGapM,
+    obstacles: s.obstacles,
     maxKwp: s.ceLimit ? 130 : undefined,
   });
 

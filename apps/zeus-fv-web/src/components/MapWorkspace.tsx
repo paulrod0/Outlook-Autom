@@ -1,15 +1,20 @@
 "use client";
 
+import * as turf from "@turf/turf";
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
 import { AddressSearch } from "./AddressSearch";
 import { HoleDrawer } from "./HoleDrawer";
+import { ObstacleDrawer } from "./ObstacleDrawer";
 import { PolygonEditor } from "./PolygonEditor";
 import type { GeocodeResult } from "@/lib/geocoding";
 import { clipParcelToBuilding, runFromPoint, runLayoutAndPvgis } from "@/lib/pipeline";
 import {
   addExclusionHole,
+  addObstacle,
   clearExclusionHoles,
+  clearObstacles,
+  removeObstacle,
   setState,
   useProjectState,
 } from "@/lib/store";
@@ -20,6 +25,8 @@ const DEFAULT_ZOOM = 5.5;
 const PARCEL_SOURCE = "zeus-parcel";
 const BUILDING_SOURCE = "zeus-building";
 const PANELS_SOURCE = "zeus-panels";
+const OBSTACLES_SOURCE = "zeus-obstacles";
+const MEASURES_SOURCE = "zeus-measures";
 
 export function MapWorkspace() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -27,11 +34,14 @@ export function MapWorkspace() {
   const markerRef = useRef<Marker | null>(null);
   const editorRef = useRef<PolygonEditor | null>(null);
   const drawerRef = useRef<HoleDrawer | null>(null);
+  const obstacleDrawerRef = useRef<ObstacleDrawer | null>(null);
   const editModeRef = useRef(false);
   const drawModeRef = useRef(false);
+  const obstacleModeRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [drawMode, setDrawMode] = useState(false);
+  const [obstacleMode, setObstacleMode] = useState(false);
   const [drawPointCount, setDrawPointCount] = useState(0);
   const project = useProjectState();
 
@@ -127,16 +137,79 @@ export function MapWorkspace() {
         paint: { "line-color": "#0f172a", "line-width": 0.4 },
       });
 
+      // Medidas: etiquetas de longitud (m) y ángulo (°) por arista del
+      // polígono activo. Se mostrarán mientras el usuario edita.
+      map.addSource(MEASURES_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "measures-text",
+        type: "symbol",
+        source: MEASURES_SOURCE,
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 12,
+          "text-font": ["Open Sans Bold"],
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#fff",
+          "text-halo-color": "#0F2A4D",
+          "text-halo-width": 2,
+        },
+      });
+
+      // Obstáculos sobre la cubierta (skylights, HVAC, chimeneas).
+      map.addSource(OBSTACLES_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "obstacles-fill",
+        type: "fill",
+        source: OBSTACLES_SOURCE,
+        paint: {
+          "fill-color": "#f43f5e",
+          "fill-opacity": 0.4,
+        },
+      });
+      map.addLayer({
+        id: "obstacles-line",
+        type: "line",
+        source: OBSTACLES_SOURCE,
+        paint: {
+          "line-color": "#f43f5e",
+          "line-width": 1.5,
+        },
+      });
+
       setReady(true);
     });
 
     map.on("click", (e) => {
-      // Edición de polígono y dibujo de hole tienen prioridad sobre el
+      // Edición de polígono y modos de dibujo tienen prioridad sobre el
       // click genérico de "cargar parcela".
-      if (editModeRef.current || drawModeRef.current) return;
+      if (editModeRef.current || drawModeRef.current || obstacleModeRef.current) return;
+
+      // Click sobre un obstáculo existente → borrarlo.
+      const hits = map.queryRenderedFeatures(e.point, {
+        layers: ["obstacles-fill"],
+      });
+      if (hits.length > 0) {
+        const idStr = hits[0].properties?.obstacleIndex;
+        const idx = typeof idStr === "number" ? idStr : Number(idStr);
+        if (Number.isInteger(idx)) {
+          removeObstacle(idx);
+          void runLayoutAndPvgis();
+          return;
+        }
+      }
+
       const { lat, lng } = e.lngLat;
       if (markerRef.current) markerRef.current.remove();
-      markerRef.current = new maplibregl.Marker({ color: "#22c55e" })
+      markerRef.current = new maplibregl.Marker({ color: "#1FBFE8" })
         .setLngLat([lng, lat])
         .addTo(map);
       void runFromPoint(lat, lng);
@@ -149,6 +222,8 @@ export function MapWorkspace() {
       editorRef.current = null;
       drawerRef.current?.destroy();
       drawerRef.current = null;
+      obstacleDrawerRef.current?.destroy();
+      obstacleDrawerRef.current = null;
       map.remove();
       mapRef.current = null;
     };
@@ -190,6 +265,83 @@ export function MapWorkspace() {
       drawerRef.current?.cancel();
     }
   }, [drawMode, ready]);
+
+  useEffect(() => {
+    obstacleModeRef.current = obstacleMode;
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    if (obstacleMode) {
+      if (!obstacleDrawerRef.current) {
+        obstacleDrawerRef.current = new ObstacleDrawer(
+          map,
+          (polygon) => {
+            addObstacle(polygon);
+            setObstacleMode(false);
+            void runLayoutAndPvgis();
+          },
+          () => setObstacleMode(false),
+        );
+      }
+      obstacleDrawerRef.current.start_();
+    } else {
+      obstacleDrawerRef.current?.cancel();
+    }
+  }, [obstacleMode, ready]);
+
+  // Render obstáculos
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const src = map.getSource(OBSTACLES_SOURCE) as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (!src) return;
+    src.setData({
+      type: "FeatureCollection",
+      features: project.obstacles.map((p, i) => ({
+        type: "Feature",
+        geometry: p,
+        properties: { obstacleIndex: i },
+      })),
+    });
+  }, [project.obstacles, ready]);
+
+  // Etiquetas de medida sobre las aristas del polígono — sólo en modo edición.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const src = map.getSource(MEASURES_SOURCE) as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (!src) return;
+
+    if (!editMode || !project.parcelGeometry || project.parcelGeometry.type !== "Polygon") {
+      src.setData({ type: "FeatureCollection", features: [] });
+      return;
+    }
+
+    const ring = project.parcelGeometry.coordinates[0];
+    const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
+    for (let i = 0; i < ring.length - 1; i++) {
+      const a = ring[i] as [number, number];
+      const b = ring[i + 1] as [number, number];
+      const lengthM = turf.distance(turf.point(a), turf.point(b), {
+        units: "meters",
+      });
+      const bearing = turf.bearing(turf.point(a), turf.point(b));
+      const normalized = ((bearing + 360) % 360).toFixed(0);
+      const mid: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      features.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: mid },
+        properties: {
+          label: `${lengthM.toFixed(2)} m · ${normalized}°`,
+        },
+      });
+    }
+    src.setData({ type: "FeatureCollection", features });
+  }, [editMode, project.parcelGeometry, ready]);
 
   const finishHole = () => {
     if (!drawerRef.current) return;
@@ -276,9 +428,11 @@ export function MapWorkspace() {
         <p className="mt-2 hidden rounded-md bg-zeus-panel/90 px-3 py-1.5 text-[11px] text-slate-300 shadow ring-1 ring-white/5 sm:block">
           {drawMode
             ? "Click sobre el mapa para añadir vértices a la zona de exclusión. Al terminar, pulsa Cerrar zona."
-            : editMode
-              ? "Arrastra los puntos verdes · Doble click para borrar · Click en un punto pequeño para añadir."
-              : "Haz clic sobre una cubierta para cargar la parcela catastral."}
+            : obstacleMode
+              ? "Arrastra sobre el mapa para dibujar el rectángulo del obstáculo (skylight, HVAC). Click sobre un obstáculo existente para borrarlo."
+              : editMode
+                ? "Arrastra los puntos verdes · Doble click para borrar · Click en un punto pequeño para añadir."
+                : "Haz clic sobre una cubierta para cargar la parcela catastral. Click sobre un obstáculo dibujado para borrarlo."}
         </p>
       </div>
       {canEdit && (
@@ -336,12 +490,50 @@ export function MapWorkspace() {
               type="button"
               onClick={() => {
                 setEditMode(false);
+                setObstacleMode(false);
                 setDrawMode(true);
               }}
-              disabled={editMode}
+              disabled={editMode || obstacleMode}
               className="rounded-md bg-zeus-panel/95 px-3 py-1.5 text-xs font-medium text-slate-200 shadow ring-1 ring-white/10 hover:bg-zeus-panel disabled:opacity-40"
             >
               Añadir zona de exclusión
+            </button>
+          )}
+
+          {obstacleMode ? (
+            <button
+              type="button"
+              onClick={() => setObstacleMode(false)}
+              className="rounded-md bg-rose-500/30 px-3 py-1.5 text-xs font-medium text-rose-100 shadow ring-1 ring-rose-300/40 hover:bg-rose-500/50"
+            >
+              Cancelar obstáculo
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setEditMode(false);
+                setDrawMode(false);
+                setObstacleMode(true);
+              }}
+              disabled={editMode || drawMode}
+              className="rounded-md bg-zeus-panel/95 px-3 py-1.5 text-xs font-medium text-slate-200 shadow ring-1 ring-white/10 hover:bg-zeus-panel disabled:opacity-40"
+              title="Arrastra sobre el mapa para dibujar un obstáculo (skylight, HVAC, etc.)"
+            >
+              Añadir obstáculo
+            </button>
+          )}
+
+          {project.obstacles.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                clearObstacles();
+                void runLayoutAndPvgis();
+              }}
+              className="rounded-md bg-rose-500/80 px-3 py-1.5 text-xs font-medium text-slate-900 shadow ring-1 ring-white/10 hover:bg-rose-500"
+            >
+              Borrar obstáculos ({project.obstacles.length})
             </button>
           )}
 

@@ -7,6 +7,7 @@ import { AddressSearch } from "./AddressSearch";
 import { HoleDrawer } from "./HoleDrawer";
 import { ObstacleDrawer } from "./ObstacleDrawer";
 import { PolygonEditor } from "./PolygonEditor";
+import { RoofDrawer } from "./RoofDrawer";
 import type { GeocodeResult } from "@/lib/geocoding";
 import { clipParcelToBuilding, runFromPoint, runLayoutAndPvgis } from "@/lib/pipeline";
 import {
@@ -35,15 +36,20 @@ export function MapWorkspace() {
   const editorRef = useRef<PolygonEditor | null>(null);
   const drawerRef = useRef<HoleDrawer | null>(null);
   const obstacleDrawerRef = useRef<ObstacleDrawer | null>(null);
+  const roofDrawerRef = useRef<RoofDrawer | null>(null);
   const editModeRef = useRef(false);
   const drawModeRef = useRef(false);
   const obstacleModeRef = useRef(false);
+  const roofDrawModeRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [drawMode, setDrawMode] = useState(false);
   const [obstacleMode, setObstacleMode] = useState(false);
+  const [roofDrawMode, setRoofDrawMode] = useState(false);
+  const [roofDrawPointCount, setRoofDrawPointCount] = useState(0);
   const [drawPointCount, setDrawPointCount] = useState(0);
   const [view3D, setView3D] = useState(false);
+  const [busyOsm, setBusyOsm] = useState(false);
   const project = useProjectState();
 
   useEffect(() => {
@@ -218,7 +224,13 @@ export function MapWorkspace() {
     map.on("click", (e) => {
       // Edición de polígono y modos de dibujo tienen prioridad sobre el
       // click genérico de "cargar parcela".
-      if (editModeRef.current || drawModeRef.current || obstacleModeRef.current) return;
+      if (
+        editModeRef.current ||
+        drawModeRef.current ||
+        obstacleModeRef.current ||
+        roofDrawModeRef.current
+      )
+        return;
 
       // Click sobre un obstáculo existente → borrarlo.
       const hits = map.queryRenderedFeatures(e.point, {
@@ -251,6 +263,8 @@ export function MapWorkspace() {
       drawerRef.current = null;
       obstacleDrawerRef.current?.destroy();
       obstacleDrawerRef.current = null;
+      roofDrawerRef.current?.destroy();
+      roofDrawerRef.current = null;
       map.remove();
       mapRef.current = null;
     };
@@ -292,6 +306,77 @@ export function MapWorkspace() {
       drawerRef.current?.cancel();
     }
   }, [drawMode, ready]);
+
+  useEffect(() => {
+    roofDrawModeRef.current = roofDrawMode;
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    if (roofDrawMode) {
+      if (!roofDrawerRef.current) {
+        roofDrawerRef.current = new RoofDrawer(map, () => {
+          setRoofDrawPointCount(roofDrawerRef.current?.pointCount() ?? 0);
+        });
+      }
+      roofDrawerRef.current.start();
+      setRoofDrawPointCount(0);
+    } else {
+      roofDrawerRef.current?.cancel();
+    }
+  }, [roofDrawMode, ready]);
+
+  const finishRoof = async () => {
+    if (!roofDrawerRef.current) return;
+    const polygon = roofDrawerRef.current.commit();
+    setRoofDrawMode(false);
+    if (!polygon) return;
+    // Calcular centroide para PVGIS
+    const centroidCoords = turf.centroid(turf.feature(polygon)).geometry
+      .coordinates as [number, number];
+    const areaM2 = turf.area(turf.feature(polygon));
+    setState({
+      parcelGeometry: polygon,
+      parcelAreaM2: Math.round(areaM2),
+      buildingGeometry: null,
+      reference: project.reference,
+      address: project.address,
+      centroid: { lon: centroidCoords[0], lat: centroidCoords[1] },
+      status: "computing",
+    });
+    await runLayoutAndPvgis();
+  };
+
+  const loadFromOSM = async () => {
+    const center = project.centroid ?? null;
+    if (!center) return;
+    setBusyOsm(true);
+    try {
+      const res = await fetch(
+        `/api/osm/building?lat=${center.lat}&lon=${center.lon}`,
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error ?? "OSM: error");
+      }
+      const data = (await res.json()) as {
+        polygon: GeoJSON.Polygon;
+        areaM2: number;
+      };
+      setState({
+        parcelGeometry: data.polygon,
+        parcelAreaM2: data.areaM2,
+        buildingGeometry: null,
+        status: "computing",
+      });
+      await runLayoutAndPvgis();
+    } catch (err) {
+      setState({
+        status: "error",
+        error: err instanceof Error ? err.message : "Error OSM",
+      });
+    } finally {
+      setBusyOsm(false);
+    }
+  };
 
   useEffect(() => {
     obstacleModeRef.current = obstacleMode;
@@ -478,14 +563,52 @@ export function MapWorkspace() {
       <div className="absolute left-3 right-14 top-3 z-10 max-w-[420px] sm:left-4 sm:top-4 md:right-auto">
         <AddressSearch disabled={!ready} onPick={onPick} />
         <p className="mt-2 hidden rounded-md bg-zeus-panel/90 px-3 py-1.5 text-[11px] text-slate-300 shadow ring-1 ring-white/5 sm:block">
-          {drawMode
-            ? "Click sobre el mapa para añadir vértices a la zona de exclusión. Al terminar, pulsa Cerrar zona."
-            : obstacleMode
-              ? "Arrastra sobre el mapa para dibujar el rectángulo del obstáculo (skylight, HVAC). Click sobre un obstáculo existente para borrarlo."
-              : editMode
-                ? "Arrastra los puntos verdes · Doble click para borrar · Click en un punto pequeño para añadir."
-                : "Haz clic sobre una cubierta para cargar la parcela catastral. Click sobre un obstáculo dibujado para borrarlo."}
+          {roofDrawMode
+            ? `Trazando cubierta · Click para añadir vértices · Click sobre el primer punto (verde) para cerrar · Backspace deshace · ${roofDrawPointCount} puntos.`
+            : drawMode
+              ? "Click sobre el mapa para añadir vértices a la zona de exclusión. Al terminar, pulsa Cerrar zona."
+              : obstacleMode
+                ? "Arrastra sobre el mapa para dibujar el rectángulo del obstáculo (skylight, HVAC). Click sobre un obstáculo existente para borrarlo."
+                : editMode
+                  ? "Arrastra los puntos verdes · Doble click para borrar · Click en un punto pequeño para añadir."
+                  : "Haz clic sobre una cubierta para cargar la parcela catastral. Si no cuadra, pulsa \"Trazar cubierta manualmente\" o \"Usar OSM\"."}
         </p>
+      </div>
+      {/* Botón "Trazar cubierta" disponible siempre, incluso sin parcela cargada */}
+      <div className="absolute right-3 top-14 z-10 flex flex-col gap-2 md:right-4 md:top-16">
+        {roofDrawMode ? (
+          <>
+            <button
+              type="button"
+              onClick={() => void finishRoof()}
+              disabled={roofDrawPointCount < 3}
+              className="rounded-md bg-zeus-green/90 px-3 py-1.5 text-xs font-medium text-slate-900 shadow ring-1 ring-white/10 hover:bg-zeus-green disabled:opacity-40"
+            >
+              Cerrar cubierta ({roofDrawPointCount} pts)
+            </button>
+            <button
+              type="button"
+              onClick={() => setRoofDrawMode(false)}
+              className="rounded-md bg-zeus-panel/95 px-3 py-1.5 text-xs font-medium text-slate-200 shadow ring-1 ring-white/10 hover:bg-zeus-panel"
+            >
+              Cancelar trazado
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setEditMode(false);
+              setDrawMode(false);
+              setObstacleMode(false);
+              setRoofDrawMode(true);
+            }}
+            className="rounded-md bg-emerald-500/90 px-3 py-1.5 text-xs font-medium text-slate-900 shadow ring-1 ring-white/10 hover:bg-emerald-500"
+            title="Dibuja la cubierta vértice a vértice sobre la imagen satélite. Mucho más preciso que Catastro cuando hay desfase."
+          >
+            Trazar cubierta manualmente
+          </button>
+        )}
       </div>
       {canEdit && (
         <>
@@ -516,6 +639,17 @@ export function MapWorkspace() {
               title="Sustituye el polígono por la huella del edificio según Catastro BU"
             >
               Recortar al edificio
+            </button>
+          )}
+          {project.centroid && (
+            <button
+              type="button"
+              onClick={() => void loadFromOSM()}
+              disabled={busyOsm}
+              className="rounded-md bg-fuchsia-500/80 px-3 py-1.5 text-xs font-medium text-slate-900 shadow ring-1 ring-white/10 hover:bg-fuchsia-500 disabled:opacity-40"
+              title="Sustituye el polígono por el edificio según OpenStreetMap (suele coincidir mejor con la imagen satélite cuando Catastro falla)"
+            >
+              {busyOsm ? "Cargando OSM…" : "Usar OSM"}
             </button>
           )}
           <button

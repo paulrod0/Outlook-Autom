@@ -36,7 +36,11 @@ export type LayoutInput = {
   azimuthDeg: number;
   edgeMarginM: number;
   rowSpacingM?: number;
+  /** Separación adicional entre columnas (m). Default 0 = paneles pegados. */
+  columnGapM?: number;
   maxKwp?: number;
+  /** Obstáculos a respetar (skylights, HVAC, chimeneas). */
+  obstacles?: GeoJSON.Polygon[];
   /**
    * Lado del bloque de paneles antes de un pasillo cortafuegos.
    * CTE DB-SI recomienda bloques de ≤ 40 m con pasillo de ≥ 1 m.
@@ -159,8 +163,29 @@ export function computeLayout(input: LayoutInput): LayoutResult {
   const effectiveEdge = Math.max(Math.abs(edgeMarginM), minEdgeForScale);
 
   // 2c) Buffer interior con el margen efectivo.
-  const buffered = turf.buffer(cleaned, -effectiveEdge, { units: "meters" });
+  let buffered = turf.buffer(cleaned, -effectiveEdge, { units: "meters" });
   if (!buffered || !buffered.geometry) return emptyResult();
+
+  // 2d) Restar obstáculos (skylights, HVAC, chimeneas) al polígono útil.
+  for (const obstacle of input.obstacles ?? []) {
+    try {
+      const padded = turf.buffer(turf.feature(obstacle), 0.3, {
+        units: "meters",
+      });
+      if (!padded) continue;
+      const diff = turf.difference(
+        turf.featureCollection([
+          buffered as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>,
+          padded as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>,
+        ]),
+      );
+      if (diff && diff.geometry) {
+        buffered = diff as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>;
+      }
+    } catch {
+      // si falla, continuamos sin restar ese obstáculo concreto
+    }
+  }
 
   const usableLngLat = buffered.geometry as
     | GeoJSON.Polygon
@@ -180,7 +205,8 @@ export function computeLayout(input: LayoutInput): LayoutResult {
       ? input.rowSpacingM
       : computeRowSpacing(latC, panel.heightM, tiltDeg);
 
-  const stepX = panel.widthM;
+  const columnGap = Math.max(0, input.columnGapM ?? 0);
+  const stepX = panel.widthM + columnGap;
   const stepY = rowSpacing;
 
   // 5) Centro fijo en UTM sobre el que rotamos el grid.

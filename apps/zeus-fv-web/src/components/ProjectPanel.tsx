@@ -3,6 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BRAND, PRODUCTS } from "@/lib/branding";
 import { DEFAULT_PANELS } from "@/lib/panelLayout";
+import {
+  groupByManufacturer,
+  loadPanelCatalog,
+  panelKey,
+  type PanelCatalogEntry,
+} from "@/lib/panelCatalog";
 import { estimateCost, estimateProfitability } from "@/lib/economics";
 import {
   type CommunityMember,
@@ -29,10 +35,15 @@ export function ProjectPanel() {
   const s = useProjectState();
   const [clientDraft, setClientDraft] = useState(s.clientName);
   const [refDraft, setRefDraft] = useState("");
+  const [catalog, setCatalog] = useState<PanelCatalogEntry[]>(DEFAULT_PANELS);
 
   useEffect(() => {
     setClientDraft(s.clientName);
   }, [s.clientName]);
+
+  useEffect(() => {
+    void loadPanelCatalog().then(setCatalog);
+  }, []);
 
   // Recalcula al cambiar parámetros, con un pequeño debounce.
   useEffect(() => {
@@ -41,7 +52,17 @@ export function ProjectPanel() {
       void runLayoutAndPvgis();
     }, 300);
     return () => clearTimeout(id);
-  }, [s.panel, s.tiltDeg, s.azimuthDeg, s.edgeMarginM, s.ceLimit, s.parcelGeometry]);
+  }, [
+    s.panel,
+    s.tiltDeg,
+    s.azimuthDeg,
+    s.edgeMarginM,
+    s.ceLimit,
+    s.parcelGeometry,
+    s.rowSpacingOverrideM,
+    s.columnGapM,
+    s.obstacles,
+  ]);
 
   const productLabel = PRODUCTS[s.productType]?.name ?? "Fotovoltaica";
   return (
@@ -93,19 +114,13 @@ export function ProjectPanel() {
       </Section>
 
       <Section title="Parámetros">
-        <SelectField
-          label="Modelo de panel"
-          value={`${s.panel.manufacturer}|${s.panel.model}`}
+        <GroupedPanelSelect
+          catalog={catalog}
+          value={panelKey(s.panel)}
           onChange={(value) => {
-            const m = DEFAULT_PANELS.find(
-              (p) => `${p.manufacturer}|${p.model}` === value,
-            );
+            const m = catalog.find((p) => panelKey(p) === value);
             if (m) setState({ panel: m });
           }}
-          options={DEFAULT_PANELS.map((p) => ({
-            value: `${p.manufacturer}|${p.model}`,
-            label: `${p.manufacturer} ${p.model} (${p.peakWp} Wp)`,
-          }))}
         />
         <div className="grid grid-cols-2 gap-2">
           <NumberField
@@ -133,6 +148,42 @@ export function ProjectPanel() {
           step={0.1}
           onChange={(edgeMarginM) => setState({ edgeMarginM })}
         />
+        <details className="rounded-md bg-optimus-navyDeep/40 px-2 py-1.5 text-[11px] text-slate-300">
+          <summary className="cursor-pointer text-slate-400">
+            Avanzado: separación filas/columnas
+          </summary>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <NumberField
+              label={`Filas (m)${s.rowSpacingOverrideM === null ? " · auto" : ""}`}
+              value={
+                s.rowSpacingOverrideM ?? (Number(s.layout?.rowSpacingM ?? 0) || 0)
+              }
+              min={0}
+              max={10}
+              step={0.05}
+              onChange={(v) =>
+                setState({ rowSpacingOverrideM: v > 0 ? v : null })
+              }
+            />
+            <NumberField
+              label="Columnas (m)"
+              value={s.columnGapM}
+              min={0}
+              max={2}
+              step={0.01}
+              onChange={(columnGapM) => setState({ columnGapM })}
+            />
+          </div>
+          {s.rowSpacingOverrideM !== null && (
+            <button
+              type="button"
+              onClick={() => setState({ rowSpacingOverrideM: null })}
+              className="mt-2 text-[10px] text-optimus-cyan hover:underline"
+            >
+              Restablecer separación de filas a auto (solsticio)
+            </button>
+          )}
+        </details>
         <label className="flex cursor-pointer items-center gap-2 rounded-md border border-white/5 bg-slate-800/60 px-2 py-1.5 text-xs text-slate-200">
           <input
             type="checkbox"
@@ -1064,6 +1115,41 @@ function NumberField({
         }}
         className="w-full rounded-md border border-white/5 bg-slate-800/80 px-2 py-1.5 text-sm text-slate-100 focus:border-zeus-green focus:outline-none"
       />
+    </label>
+  );
+}
+
+function GroupedPanelSelect({
+  catalog,
+  value,
+  onChange,
+}: {
+  catalog: PanelCatalogEntry[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const groups = useMemo(() => groupByManufacturer(catalog), [catalog]);
+  return (
+    <label className="block text-xs text-slate-300">
+      <span className="mb-1 block text-[11px] text-slate-400">
+        Modelo de panel ({catalog.length} en catálogo)
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md border border-white/5 bg-slate-800/80 px-2 py-1.5 text-sm text-slate-100 focus:border-zeus-green focus:outline-none"
+      >
+        {groups.map((g) => (
+          <optgroup key={g.manufacturer} label={g.manufacturer}>
+            {g.panels.map((p) => (
+              <option key={panelKey(p)} value={panelKey(p)}>
+                {p.model} · {p.peakWp} Wp
+                {p.category === "bifacial" ? " · bifacial" : ""}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
     </label>
   );
 }

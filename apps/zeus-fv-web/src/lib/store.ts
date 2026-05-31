@@ -41,6 +41,12 @@ export type ProjectState = {
   tiltDeg: number;
   azimuthDeg: number;
   edgeMarginM: number;
+  /** Override manual de la separación entre filas (m). null = auto (solsticio). */
+  rowSpacingOverrideM: number | null;
+  /** Separación adicional entre columnas (m). 0 = paneles pegados. */
+  columnGapM: number;
+  /** Lista de obstáculos sobre la cubierta (skylights, HVAC, chimeneas). */
+  obstacles: GeoJSON.Polygon[];
   ceLimit: boolean; // si true, aplica el máx 130 kWp por refcat (Fase 1)
   communityMembers: CommunityMember[];
   bill: BillSummary | null;
@@ -82,6 +88,9 @@ const initialState: ProjectState = {
   tiltDeg: 15,
   azimuthDeg: 180,
   edgeMarginM: 0.5,
+  rowSpacingOverrideM: null,
+  columnGapM: 0,
+  obstacles: [],
   ceLimit: false,
   communityMembers: [],
   bill: null,
@@ -144,6 +153,22 @@ export function clearExclusionHoles(): void {
     coordinates: [state.parcelGeometry.coordinates[0]],
   };
   setState({ parcelGeometry: next });
+}
+
+/** Añade un obstáculo (skylight, HVAC) al array. */
+export function addObstacle(polygon: GeoJSON.Polygon): void {
+  setState({ obstacles: [...state.obstacles, polygon] });
+}
+
+/** Quita el obstáculo en la posición indicada. */
+export function removeObstacle(index: number): void {
+  setState({ obstacles: state.obstacles.filter((_, i) => i !== index) });
+}
+
+/** Borra todos los obstáculos de la cubierta. */
+export function clearObstacles(): void {
+  if (state.obstacles.length === 0) return;
+  setState({ obstacles: [] });
 }
 
 export function useProjectState(): ProjectState {

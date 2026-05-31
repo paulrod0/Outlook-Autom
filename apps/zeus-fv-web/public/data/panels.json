@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-28",
+  "panels": [
+    {
+      "manufacturer": "LONGi",
+      "model": "Hi-MO X10 LR8-66HGD-630M",
+      "peakWp": 630,
+      "widthM": 1.134,
+      "heightM": 2.382,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "LONGi",
+      "model": "Hi-MO 6 LR5-72HBD-580M",
+      "peakWp": 580,
+      "widthM": 1.134,
+      "heightM": 2.278,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "LONGi",
+      "model": "Hi-MO 5 LR5-72HPH-555M",
+      "peakWp": 555,
+      "widthM": 1.134,
+      "heightM": 2.256,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "LONGi",
+      "model": "Hi-MO 4 LR4-72HPH-455M",
+      "peakWp": 455,
+      "widthM": 1.038,
+      "heightM": 2.094,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "JA Solar",
+      "model": "DeepBlue 4.0 Pro JAM72D40-625GB",
+      "peakWp": 625,
+      "widthM": 1.134,
+      "heightM": 2.382,
+      "category": "bifacial"
+    },
+    {
+      "manufacturer": "JA Solar",
+      "model": "DeepBlue 3.0 Pro JAM72D40-585GB",
+      "peakWp": 585,
+      "widthM": 1.134,
+      "heightM": 2.278,
+      "category": "bifacial"
+    },
+    {
+      "manufacturer": "JA Solar",
+      "model": "JAM72S30-555MR",
+      "peakWp": 555,
+      "widthM": 1.134,
+      "heightM": 2.279,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "JA Solar",
+      "model": "JAM54S31-410MR",
+      "peakWp": 410,
+      "widthM": 1.134,
+      "heightM": 1.722,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "Jinko Solar",
+      "model": "Tiger Neo N-Type 72HL4-BDV 625W",
+      "peakWp": 625,
+      "widthM": 1.134,
+      "heightM": 2.382,
+      "category": "bifacial"
+    },
+    {
+      "manufacturer": "Jinko Solar",
+      "model": "Tiger Neo N-Type 72HL4-BDV 590W",
+      "peakWp": 590,
+      "widthM": 1.134,
+      "heightM": 2.278,
+      "category": "bifacial"
+    },
+    {
+      "manufacturer": "Jinko Solar",
+      "model": "Tiger Neo N-Type 54HL4R-BDV 440W",
+      "peakWp": 440,
+      "widthM": 1.134,
+      "heightM": 1.762,
+      "category": "bifacial"
+    },
+    {
+      "manufacturer": "Trina Solar",
+      "model": "Vertex N TSM-NEG21C.20 720W",
+      "peakWp": 720,
+      "widthM": 1.303,
+      "heightM": 2.384,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "Trina Solar",
+      "model": "Vertex N TSM-NEG19RC.20 580W",
+      "peakWp": 580,
+      "widthM": 1.134,
+      "heightM": 2.278,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "Trina Solar",
+      "model": "Vertex S+ TSM-NEG9R.28 440W",
+      "peakWp": 440,
+      "widthM": 1.134,
+      "heightM": 1.762,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "Trina Solar",
+      "model": "TallMax TSM-DC082H.08 510W",
+      "peakWp": 510,
+      "widthM": 1.134,
+      "heightM": 2.187,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "Canadian Solar",
+      "model": "TOPHiKu7 CS7N-MS 700W",
+      "peakWp": 700,
+      "widthM": 1.303,
+      "heightM": 2.384,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "Canadian Solar",
+      "model": "HiKu7 CS7L-MS 600W",
+      "peakWp": 600,
+      "widthM": 1.134,
+      "heightM": 2.382,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "Risen Energy",
+      "model": "Titan RSM132-8-660BMDG 660W",
+      "peakWp": 660,
+      "widthM": 1.134,
+      "heightM": 2.384,
+      "category": "bifacial"
+    },
+    {
+      "manufacturer": "Risen Energy",
+      "model": "Hyper-ion RSM110-8-550BNDG 550W",
+      "peakWp": 550,
+      "widthM": 1.134,
+      "heightM": 2.278,
+      "category": "bifacial"
+    },
+    {
+      "manufacturer": "Astronergy",
+      "model": "ASTRO N7s CHSM72N(DG)-HC 585W",
+      "peakWp": 585,
+      "widthM": 1.134,
+      "heightM": 2.278,
+      "category": "bifacial"
+    },
+    {
+      "manufacturer": "Astronergy",
+      "model": "ASTRO 5 CHSM60M-HC 410W",
+      "peakWp": 410,
+      "widthM": 1.038,
+      "heightM": 1.722,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "Q CELLS",
+      "model": "Q.PEAK DUO XL-G11.3 600W",
+      "peakWp": 600,
+      "widthM": 1.134,
+      "heightM": 2.382,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "Q CELLS",
+      "model": "Q.PEAK DUO ML-G11+ 410W",
+      "peakWp": 410,
+      "widthM": 1.038,
+      "heightM": 1.722,
+      "category": "monofacial"
+    },
+    {
+      "manufacturer": "SunPower",
+      "model": "Maxeon 6 AC 430W",
+      "peakWp": 430,
+      "widthM": 1.046,
+      "heightM": 1.812,
+      "category": "monofacial"
+    }
+  ]
+}

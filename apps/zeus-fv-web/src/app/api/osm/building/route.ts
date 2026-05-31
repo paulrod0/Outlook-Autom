@@ -13,7 +13,14 @@ export const revalidate = 3600;
  *
  * GET /api/osm/building?lat=...&lon=...
  */
-const OVERPASS = "https://overpass-api.de/api/interpreter";
+// Overpass tiene varios mirrors; algunos rechazan tráfico de cloud IPs.
+// Intentamos en orden hasta encontrar uno que responda.
+const OVERPASS_INSTANCES = [
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://lz4.overpass-api.de/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.osm.ch/api/interpreter",
+];
 
 type OverpassNode = { lat: number; lon: number };
 type OverpassWay = {
@@ -38,22 +45,46 @@ export async function GET(req: Request) {
 
   const query = `[out:json][timeout:25];(way["building"](around:${radius},${lat},${lon}););out geom;`;
   try {
-    const res = await fetch(OVERPASS, {
-      method: "POST",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: `data=${encodeURIComponent(query)}`,
-    });
-    if (!res.ok) {
+    let data: { elements?: OverpassWay[] } | null = null;
+    let lastErr: unknown = null;
+    for (const instance of OVERPASS_INSTANCES) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 10000);
+        const res = await fetch(instance, {
+          method: "POST",
+          signal: ctrl.signal,
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+          },
+          body: `data=${encodeURIComponent(query)}`,
+        });
+        clearTimeout(t);
+        if (!res.ok) {
+          lastErr = new Error(`HTTP ${res.status} at ${instance}`);
+          continue;
+        }
+        data = (await res.json()) as { elements?: OverpassWay[] };
+        break;
+      } catch (err) {
+        lastErr = err;
+        continue;
+      }
+    }
+    if (!data) {
       return NextResponse.json(
-        { error: `Overpass HTTP ${res.status}` },
+        {
+          error:
+            lastErr instanceof Error
+              ? `Overpass: ${lastErr.message}`
+              : "Overpass: sin respuesta de ningún mirror",
+        },
         { status: 502 },
       );
     }
-    const data = (await res.json()) as { elements?: OverpassWay[] };
     const ways = (data.elements ?? []).filter((e) => e.type === "way");
     if (ways.length === 0) {
       return NextResponse.json(

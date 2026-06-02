@@ -30,6 +30,17 @@ const BUILDING_SOURCE = "zeus-building";
 const PANELS_SOURCE = "zeus-panels";
 const OBSTACLES_SOURCE = "zeus-obstacles";
 const MEASURES_SOURCE = "zeus-measures";
+const ROOFPLANES_SOURCE = "zeus-roofplanes";
+
+// Paleta para distinguir faldones en el mapa.
+const PLANE_COLORS = [
+  "#f97316",
+  "#a855f7",
+  "#14b8a6",
+  "#eab308",
+  "#ec4899",
+  "#84cc16",
+];
 
 export function MapWorkspace() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -192,6 +203,45 @@ export function MapWorkspace() {
           "text-font": ["Open Sans Bold"],
           "text-allow-overlap": true,
           "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#fff",
+          "text-halo-color": "#0F2A4D",
+          "text-halo-width": 2,
+        },
+      });
+
+      // Faldones segmentados (cada uno su color).
+      map.addSource(ROOFPLANES_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "roofplanes-fill",
+        type: "fill",
+        source: ROOFPLANES_SOURCE,
+        paint: {
+          "fill-color": ["get", "color"],
+          "fill-opacity": 0.25,
+        },
+      });
+      map.addLayer({
+        id: "roofplanes-line",
+        type: "line",
+        source: ROOFPLANES_SOURCE,
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": 2,
+        },
+      });
+      map.addLayer({
+        id: "roofplanes-label",
+        type: "symbol",
+        source: ROOFPLANES_SOURCE,
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 11,
+          "text-font": ["Open Sans Bold"],
         },
         paint: {
           "text-color": "#fff",
@@ -411,14 +461,27 @@ export function MapWorkspace() {
     setBusyLidar(true);
     setLidarInfo(null);
     try {
-      const res = await fetch(
-        `/api/roof-analysis?lat=${center.lat}&lon=${center.lon}`,
-      );
+      // Si ya hay un polígono de cubierta cargado, lo enviamos para que el
+      // análisis se restrinja a ESE edificio (clave en zonas densas donde
+      // los edificios se fusionan a 2,5 m). Si no, modo edificio aislado.
+      const hasPolygon = !!project.parcelGeometry;
+      const res = hasPolygon
+        ? await fetch("/api/roof-analysis", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              lat: center.lat,
+              lon: center.lon,
+              polygon: project.parcelGeometry,
+            }),
+          })
+        : await fetch(`/api/roof-analysis?lat=${center.lat}&lon=${center.lon}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         throw new Error(err.error ?? "LiDAR: error");
       }
       const a = (await res.json()) as {
+        selectionMode: "polygon" | "lidar-component";
         isPitched: boolean;
         dominantTiltDeg: number;
         dominantAzimuthDeg: number | null;
@@ -426,50 +489,94 @@ export function MapWorkspace() {
         buildingHeightM: number;
         pitchedFraction: number;
         planes: Array<{ label: string; tiltDeg: number; azimuthDeg: number; fraction: number }>;
+        segments: Array<{
+          label: string;
+          kind: "flat" | "pitched";
+          tiltDeg: number;
+          azimuthDeg: number;
+          areaM2: number;
+          polygon: GeoJSON.Polygon;
+        }>;
         footprint: GeoJSON.Polygon | null;
         footprintTouchesEdge: boolean;
         resolutionM: number;
       };
 
-      // 1) Aplicar tilt/azimut detectados (sólo si es inclinada; si es plana
-      //    dejamos el tilt de estructura que tenga el usuario).
-      const patch: Record<string, unknown> = {};
-      if (a.isPitched) {
-        patch.tiltDeg = a.dominantTiltDeg;
-        if (a.dominantAzimuthDeg !== null) patch.azimuthDeg = a.dominantAzimuthDeg;
-      }
+      // Si el LiDAR mandó (Catastro desalineado), la huella real reemplaza
+      // al polígono de Catastro en cualquier caso.
+      const lidarOverridesPolygon = a.selectionMode === "lidar-component";
 
-      // 2) Reemplazar el polígono por la huella real del edificio si es
-      //    fiable (no toca el borde del parche → footprint completo).
-      let footprintApplied = false;
-      if (a.footprint && !a.footprintTouchesEdge) {
-        // Simplificar el contorno escalonado del ráster (2,5 m) a líneas limpias.
-        const simplified = turf.simplify(turf.feature(a.footprint), {
-          tolerance: 0.00002,
-          highQuality: true,
-        });
-        const geom = simplified.geometry as GeoJSON.Polygon;
-        const areaM2 = turf.area(turf.feature(geom));
-        if (areaM2 > 20) {
-          patch.parcelGeometry = geom;
-          patch.parcelAreaM2 = Math.round(areaM2);
-          patch.buildingGeometry = null;
-          footprintApplied = true;
+      const simplifyPoly = (poly: GeoJSON.Polygon): GeoJSON.Polygon => {
+        try {
+          return turf.simplify(turf.feature(poly), {
+            tolerance: 0.00002,
+            highQuality: true,
+          }).geometry as GeoJSON.Polygon;
+        } catch {
+          return poly;
+        }
+      };
+
+      const patch: Record<string, unknown> = {};
+      let modeMsg = "";
+
+      const pitchedSegments = a.segments.filter((s) => s.kind === "pitched");
+
+      if (a.isPitched && pitchedSegments.length >= 1) {
+        // CUBIERTA INCLINADA → crear un faldón por segmento detectado,
+        // cada uno con su polígono, tilt y azimut reales.
+        clearRoofPlanes();
+        const planes: RoofPlane[] = pitchedSegments.map((s, i) => ({
+          id:
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `lidar-${i}`,
+          label: s.label,
+          polygon: simplifyPoly(s.polygon),
+          tiltDeg: s.tiltDeg,
+          azimuthDeg: s.azimuthDeg,
+          obstacles: [],
+          enabled: true,
+        }));
+        patch.roofPlanes = planes;
+        modeMsg = `${planes.length} faldón(es) segmentado(s)`;
+      } else {
+        // CUBIERTA PLANA → modo simple (un polígono, estructura inclinada).
+        clearRoofPlanes();
+        patch.roofPlanes = [];
+        if (hasPolygon && !lidarOverridesPolygon) {
+          // Catastro alineado: conservamos la cubierta del usuario.
+          modeMsg = "plana confirmada · se mantiene tu polígono";
+        } else {
+          // Modo edificio aislado: aplicamos la huella detectada.
+          let footprintApplied = false;
+          const flat = a.segments.find((s) => s.kind === "flat");
+          const poly = flat?.polygon ?? a.footprint;
+          if (poly && (!a.footprintTouchesEdge || flat)) {
+            const geom = simplifyPoly(poly);
+            const areaM2 = turf.area(turf.feature(geom));
+            if (areaM2 > 20) {
+              patch.parcelGeometry = geom;
+              patch.parcelAreaM2 = Math.round(areaM2);
+              patch.buildingGeometry = null;
+              footprintApplied = true;
+            }
+          }
+          modeMsg = footprintApplied
+            ? "huella real aplicada"
+            : a.footprintTouchesEdge
+              ? "huella parcial (edificio mayor que el área analizada)"
+              : "sin huella fiable";
         }
       }
 
       setState(patch);
       await runLayoutAndPvgis();
 
-      const fp = footprintApplied
-        ? "huella real aplicada"
-        : a.footprintTouchesEdge
-          ? "huella parcial (edificio mayor que el área analizada)"
-          : "sin huella fiable";
       setLidarInfo(
         a.isPitched
-          ? `Cubierta inclinada · ${a.dominantTiltDeg}° · azimut ${a.dominantAzimuthDeg ?? "—"}° · ${a.buildingHeightM} m alto · ${a.planes.length} faldón(es) · ${fp}`
-          : `Cubierta plana · ${a.buildingHeightM} m alto · ${fp}`,
+          ? `Inclinada · ${a.dominantTiltDeg}° · azimut ${a.dominantAzimuthDeg ?? "—"}° · ${a.buildingHeightM} m · ${modeMsg}`
+          : `Plana · ${a.buildingHeightM} m · ${modeMsg}`,
       );
     } catch (err) {
       setLidarInfo(
@@ -553,6 +660,29 @@ export function MapWorkspace() {
       })),
     });
   }, [project.obstacles, ready]);
+
+  // Render de los faldones segmentados (cada uno con su color + etiqueta).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const src = map.getSource(ROOFPLANES_SOURCE) as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (!src) return;
+    src.setData({
+      type: "FeatureCollection",
+      features: project.roofPlanes
+        .filter((p) => p.enabled)
+        .map((p, i) => ({
+          type: "Feature",
+          geometry: p.polygon,
+          properties: {
+            color: PLANE_COLORS[i % PLANE_COLORS.length],
+            label: `${p.label} · ${p.tiltDeg}°/${p.azimuthDeg}°`,
+          },
+        })),
+    });
+  }, [project.roofPlanes, ready]);
 
   // Etiquetas de medida sobre las aristas del polígono — sólo en modo edición.
   useEffect(() => {

@@ -53,8 +53,21 @@ export type RoofPlaneDetected = {
   fraction: number;
 };
 
+/** Faldón segmentado: una región contigua con su propio polígono. */
+export type RoofSegment = {
+  label: string;
+  kind: "flat" | "pitched";
+  tiltDeg: number;
+  azimuthDeg: number;
+  areaM2: number;
+  polygon: GeoJSON.Polygon;
+};
+
 export type RoofAnalysis = {
   source: "ign-lidar";
+  /** Cómo se eligió el edificio: 'polygon' = Catastro alineado; */
+  /** 'lidar-component' = Catastro desalineado, manda el LiDAR. */
+  selectionMode: "polygon" | "lidar-component";
   isPitched: boolean;
   dominantTiltDeg: number;
   dominantAzimuthDeg: number | null;
@@ -62,6 +75,8 @@ export type RoofAnalysis = {
   buildingHeightM: number;
   pitchedFraction: number;
   planes: RoofPlaneDetected[];
+  /** Faldones segmentados con geometría propia (para crear roofPlanes). */
+  segments: RoofSegment[];
   footprint: GeoJSON.Polygon | null;
   footprintTouchesEdge: boolean;
   resolutionM: number;
@@ -285,6 +300,7 @@ export async function analyzeRoof(
   lat: number,
   lon: number,
   boxM = 200,
+  polygon?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null,
 ): Promise<RoofAnalysis> {
   const { z, originE, originN, width, height } = await fetchMdsGrid(
     lat,
@@ -299,7 +315,50 @@ export async function analyzeRoof(
   const threshold = Math.max(2, maxH * 0.3);
 
   const mask = z.map((row) => row.map((v) => v >= threshold));
-  const comp = largestComponentAtCenter(mask);
+
+  // Apertura morfológica (erosión + dilatación) para separar edificios
+  // que se tocan por <5 m a la resolución de 2,5 m.
+  const opened = morphOpen(mask);
+
+  // Selección del edificio objetivo. Estrategia adaptativa porque el
+  // polígono de Catastro suele estar DESALINEADO respecto al edificio real
+  // (el LiDAR sí coincide con la imagen):
+  //  - Si el polígono del usuario contiene suficientes celdas de edificio
+  //    (Catastro bien alineado) → restringir a ese polígono.
+  //  - Si no (Catastro desalineado, o sin polígono) → usar la componente
+  //    conexa real del LiDAR cerca del centro (la realidad manda).
+  let comp: boolean[][];
+  let selectionMode: "polygon" | "lidar-component" = "lidar-component";
+
+  if (polygon) {
+    const ringsUtm = polygonRingsToUtm(polygon);
+    let inPolyElevated = 0;
+    let inPolyTotal = 0;
+    const inPoly = mask.map((row, r) =>
+      row.map((isBuilding, c) => {
+        const E = originE + (c + 0.5) * CELL_M;
+        const N = originN - (r + 0.5) * CELL_M;
+        const ins = pointInRings(E, N, ringsUtm);
+        if (ins) {
+          inPolyTotal++;
+          if (isBuilding) inPolyElevated++;
+        }
+        return ins && isBuilding;
+      }),
+    );
+    // ¿Catastro coincide con el edificio? (≥40 celdas y ≥30% del polígono).
+    const aligned =
+      inPolyElevated >= 40 && inPolyElevated / Math.max(1, inPolyTotal) >= 0.3;
+    if (aligned) {
+      comp = inPoly;
+      selectionMode = "polygon";
+    } else {
+      comp = largestComponentAtCenter(opened);
+    }
+  } else {
+    comp = largestComponentAtCenter(opened);
+  }
+  void selectionMode;
 
   const { slope, aspect } = slopeAspect(z, CELL_M);
 
@@ -341,8 +400,14 @@ export async function analyzeRoof(
   const planes = detectPlanes(pitchedAspect, pitchedSlope, cellsBuilding);
 
   // Huella del edificio desde la elevación.
-  const { polygon, touchesEdge } = buildFootprint(
+  const footprintResult = buildFootprint(comp, originE, originN, width, height);
+
+  // Segmentación en faldones-polígono.
+  const segments = segmentRoofPlanes(
     comp,
+    slope,
+    aspect,
+    isPitched,
     originE,
     originN,
     width,
@@ -351,6 +416,7 @@ export async function analyzeRoof(
 
   return {
     source: "ign-lidar",
+    selectionMode,
     isPitched,
     dominantTiltDeg: Math.round(dominantTilt),
     dominantAzimuthDeg: dominantAzimuth === null ? null : Math.round(dominantAzimuth),
@@ -358,11 +424,195 @@ export async function analyzeRoof(
     buildingHeightM: Math.round(buildingHeightM),
     pitchedFraction: Number(pitchedFraction.toFixed(2)),
     planes,
-    footprint: polygon,
-    footprintTouchesEdge: touchesEdge,
+    segments,
+    footprint: footprintResult.polygon,
+    footprintTouchesEdge: footprintResult.touchesEdge,
     resolutionM: CELL_M,
     cellsBuilding,
   };
+}
+
+/**
+ * Segmenta la cubierta en faldones contiguos.
+ *
+ * - Cubierta plana → un único segmento (toda la huella), azimut Sur,
+ *   tilt 0 (el usuario decide la inclinación de estructura).
+ * - Cubierta inclinada → etiqueta cada celda por sector de orientación
+ *   (8 sectores de 45°), agrupa celdas contiguas del mismo sector en
+ *   regiones (componentes conexas) y vectoriza cada región significativa.
+ */
+function segmentRoofPlanes(
+  comp: boolean[][],
+  slope: number[][],
+  aspect: number[][],
+  isPitched: boolean,
+  originE: number,
+  originN: number,
+  width: number,
+  height: number,
+): RoofSegment[] {
+  const dirNames = ["Norte", "Noreste", "Este", "Sureste", "Sur", "Suroeste", "Oeste", "Noroeste"];
+
+  // Cubierta plana: un solo faldón = la huella entera.
+  if (!isPitched) {
+    const { polygon } = buildFootprint(comp, originE, originN, width, height);
+    if (!polygon) return [];
+    return [
+      {
+        label: "Cubierta plana",
+        kind: "flat",
+        tiltDeg: 0,
+        azimuthDeg: 180,
+        areaM2: Math.round(polygonAreaM2(polygon)),
+        polygon,
+      },
+    ];
+  }
+
+  // Etiqueta de sector por celda (−1 = no edificio o casi plana).
+  const label: number[][] = comp.map((row) => row.map(() => -1));
+  for (let r = 1; r < height - 1; r++) {
+    for (let c = 1; c < width - 1; c++) {
+      if (!comp[r][c]) continue;
+      if (slope[r][c] <= 8) {
+        label[r][c] = 8; // sector "plano" dentro de cubierta inclinada (caballete)
+      } else {
+        label[r][c] = Math.floor(((aspect[r][c] + 22.5) % 360) / 45);
+      }
+    }
+  }
+
+  // Componentes conexas por sector.
+  const visited = comp.map((row) => row.map(() => false));
+  const segments: RoofSegment[] = [];
+  const minCells = 6;
+
+  for (let r = 1; r < height - 1; r++) {
+    for (let c = 1; c < width - 1; c++) {
+      if (visited[r][c] || label[r][c] < 0) continue;
+      const sector = label[r][c];
+      // BFS de la región contigua con el mismo sector.
+      const region: [number, number][] = [];
+      const stack: [number, number][] = [[r, c]];
+      visited[r][c] = true;
+      while (stack.length) {
+        const [cr, cc] = stack.pop()!;
+        region.push([cr, cc]);
+        for (const [dr, dc] of [
+          [-1, 0],
+          [1, 0],
+          [0, -1],
+          [0, 1],
+        ] as [number, number][]) {
+          const nr = cr + dr;
+          const nc = cc + dc;
+          if (nr < 1 || nc < 1 || nr >= height - 1 || nc >= width - 1) continue;
+          if (visited[nr][nc] || label[nr][nc] !== sector) continue;
+          visited[nr][nc] = true;
+          stack.push([nr, nc]);
+        }
+      }
+      if (region.length < minCells) continue;
+      if (sector === 8) continue; // el caballete plano no es un faldón aprovechable
+
+      // Máscara de la región para trazar su contorno.
+      const mask = comp.map((row) => row.map(() => false));
+      for (const [rr, cc] of region) mask[rr][cc] = true;
+      const { polygon } = buildFootprint(mask, originE, originN, width, height);
+      if (!polygon) continue;
+
+      const slopes = region.map(([rr, cc]) => slope[rr][cc]);
+      const aspects = region.map(([rr, cc]) => aspect[rr][cc]);
+      segments.push({
+        label: `Faldón ${dirNames[sector]}`,
+        kind: "pitched",
+        tiltDeg: Math.round(slopes.reduce((a, b) => a + b, 0) / slopes.length),
+        azimuthDeg: Math.round(circularMean(aspects)),
+        areaM2: Math.round(polygonAreaM2(polygon)),
+        polygon,
+      });
+    }
+  }
+
+  return segments.sort((a, b) => b.areaM2 - a.areaM2).slice(0, 6);
+}
+
+function polygonAreaM2(poly: GeoJSON.Polygon): number {
+  // Shoelace en metros aprox usando proyección local.
+  const ring = poly.coordinates[0];
+  let s = 0;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const [lon1, lat1] = ring[i];
+    const [lon2, lat2] = ring[i + 1];
+    const x1 = lon1 * Math.cos((lat1 * Math.PI) / 180) * 111320;
+    const x2 = lon2 * Math.cos((lat2 * Math.PI) / 180) * 111320;
+    const y1 = lat1 * 110540;
+    const y2 = lat2 * 110540;
+    s += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(s) / 2;
+}
+
+/** Erosión 4-vecindad: una celda sobrevive si sus 4 vecinas también están. */
+function erode(mask: boolean[][]): boolean[][] {
+  const H = mask.length;
+  const W = mask[0].length;
+  return mask.map((row, r) =>
+    row.map((v, c) => {
+      if (!v) return false;
+      if (r === 0 || c === 0 || r === H - 1 || c === W - 1) return false;
+      return mask[r - 1][c] && mask[r + 1][c] && mask[r][c - 1] && mask[r][c + 1];
+    }),
+  );
+}
+
+/** Dilatación 4-vecindad. */
+function dilate(mask: boolean[][]): boolean[][] {
+  const H = mask.length;
+  const W = mask[0].length;
+  return mask.map((row, r) =>
+    row.map((v, c) => {
+      if (v) return true;
+      return (
+        (r > 0 && mask[r - 1][c]) ||
+        (r < H - 1 && mask[r + 1][c]) ||
+        (c > 0 && mask[r][c - 1]) ||
+        (c < W - 1 && mask[r][c + 1])
+      );
+    }),
+  );
+}
+
+/** Apertura = erosión seguida de dilatación. Separa uniones finas. */
+function morphOpen(mask: boolean[][]): boolean[][] {
+  return dilate(erode(mask));
+}
+
+/** Convierte los anillos exteriores del polígono (lon/lat) a UTM. */
+function polygonRingsToUtm(
+  poly: GeoJSON.Polygon | GeoJSON.MultiPolygon,
+): [number, number][][] {
+  const polys = poly.type === "Polygon" ? [poly.coordinates] : poly.coordinates;
+  return polys.map((rings) =>
+    rings[0].map((p) => toUTM(p[0], p[1]) as [number, number]),
+  );
+}
+
+/** Ray-casting: ¿está (E,N) dentro de alguno de los anillos? */
+function pointInRings(E: number, N: number, rings: [number, number][][]): boolean {
+  for (const ring of rings) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      const intersect =
+        yi > N !== yj > N &&
+        E < ((xj - xi) * (N - yi)) / (yj - yi + 1e-12) + xi;
+      if (intersect) inside = !inside;
+    }
+    if (inside) return true;
+  }
+  return false;
 }
 
 function median(arr: number[]): number {

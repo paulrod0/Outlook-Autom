@@ -54,6 +54,8 @@ export function MapWorkspace() {
   const [busyOsm, setBusyOsm] = useState(false);
   const [busyGoogle, setBusyGoogle] = useState(false);
   const [googleQuality, setGoogleQuality] = useState<string | null>(null);
+  const [busyLidar, setBusyLidar] = useState(false);
+  const [lidarInfo, setLidarInfo] = useState<string | null>(null);
   const project = useProjectState();
 
   useEffect(() => {
@@ -403,6 +405,81 @@ export function MapWorkspace() {
     }
   };
 
+  const analyzeWithLidar = async () => {
+    const center = project.centroid ?? null;
+    if (!center) return;
+    setBusyLidar(true);
+    setLidarInfo(null);
+    try {
+      const res = await fetch(
+        `/api/roof-analysis?lat=${center.lat}&lon=${center.lon}`,
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error ?? "LiDAR: error");
+      }
+      const a = (await res.json()) as {
+        isPitched: boolean;
+        dominantTiltDeg: number;
+        dominantAzimuthDeg: number | null;
+        meanTiltDeg: number;
+        buildingHeightM: number;
+        pitchedFraction: number;
+        planes: Array<{ label: string; tiltDeg: number; azimuthDeg: number; fraction: number }>;
+        footprint: GeoJSON.Polygon | null;
+        footprintTouchesEdge: boolean;
+        resolutionM: number;
+      };
+
+      // 1) Aplicar tilt/azimut detectados (sólo si es inclinada; si es plana
+      //    dejamos el tilt de estructura que tenga el usuario).
+      const patch: Record<string, unknown> = {};
+      if (a.isPitched) {
+        patch.tiltDeg = a.dominantTiltDeg;
+        if (a.dominantAzimuthDeg !== null) patch.azimuthDeg = a.dominantAzimuthDeg;
+      }
+
+      // 2) Reemplazar el polígono por la huella real del edificio si es
+      //    fiable (no toca el borde del parche → footprint completo).
+      let footprintApplied = false;
+      if (a.footprint && !a.footprintTouchesEdge) {
+        // Simplificar el contorno escalonado del ráster (2,5 m) a líneas limpias.
+        const simplified = turf.simplify(turf.feature(a.footprint), {
+          tolerance: 0.00002,
+          highQuality: true,
+        });
+        const geom = simplified.geometry as GeoJSON.Polygon;
+        const areaM2 = turf.area(turf.feature(geom));
+        if (areaM2 > 20) {
+          patch.parcelGeometry = geom;
+          patch.parcelAreaM2 = Math.round(areaM2);
+          patch.buildingGeometry = null;
+          footprintApplied = true;
+        }
+      }
+
+      setState(patch);
+      await runLayoutAndPvgis();
+
+      const fp = footprintApplied
+        ? "huella real aplicada"
+        : a.footprintTouchesEdge
+          ? "huella parcial (edificio mayor que el área analizada)"
+          : "sin huella fiable";
+      setLidarInfo(
+        a.isPitched
+          ? `Cubierta inclinada · ${a.dominantTiltDeg}° · azimut ${a.dominantAzimuthDeg ?? "—"}° · ${a.buildingHeightM} m alto · ${a.planes.length} faldón(es) · ${fp}`
+          : `Cubierta plana · ${a.buildingHeightM} m alto · ${fp}`,
+      );
+    } catch (err) {
+      setLidarInfo(
+        err instanceof Error ? `LiDAR: ${err.message}` : "Error análisis LiDAR",
+      );
+    } finally {
+      setBusyLidar(false);
+    }
+  };
+
   const loadFromOSM = async () => {
     const center = project.centroid ?? null;
     if (!center) return;
@@ -716,10 +793,26 @@ export function MapWorkspace() {
           {project.centroid && (
             <button
               type="button"
+              onClick={() => void analyzeWithLidar()}
+              disabled={busyLidar}
+              className="rounded-md bg-gradient-to-r from-emerald-500 to-teal-500 px-3 py-1.5 text-xs font-medium text-white shadow ring-1 ring-white/10 hover:opacity-90 disabled:opacity-40"
+              title="Análisis con LiDAR del IGN (gratis): detecta inclinación, orientación, altura y la huella real del edificio. Cobertura España."
+            >
+              {busyLidar ? "Analizando LiDAR…" : "📡 Analizar cubierta (LiDAR IGN)"}
+            </button>
+          )}
+          {lidarInfo && (
+            <p className="rounded-md bg-emerald-500/20 px-2 py-1 text-[10px] leading-tight text-emerald-100">
+              {lidarInfo}
+            </p>
+          )}
+          {project.centroid && (
+            <button
+              type="button"
               onClick={() => void detectWithGoogleSolar()}
               disabled={busyGoogle}
               className="rounded-md bg-gradient-to-r from-sky-500 to-violet-500 px-3 py-1.5 text-xs font-medium text-white shadow ring-1 ring-white/10 hover:opacity-90 disabled:opacity-40"
-              title="Google Solar IA: detecta cada plano del tejado con su pitch y azimut reales. ~0,10-5 € por consulta."
+              title="Google Solar IA (de pago): detecta cada plano del tejado. Alternativa a LiDAR IGN para máxima resolución. ~0,10-5 € por consulta."
             >
               {busyGoogle ? "Analizando techo…" : "🛰 Detectar techo (Google AI)"}
             </button>

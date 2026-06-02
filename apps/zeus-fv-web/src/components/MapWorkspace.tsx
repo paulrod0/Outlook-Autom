@@ -15,9 +15,11 @@ import {
   addObstacle,
   clearExclusionHoles,
   clearObstacles,
+  clearRoofPlanes,
   removeObstacle,
   setState,
   useProjectState,
+  type RoofPlane,
 } from "@/lib/store";
 
 const DEFAULT_CENTER: [number, number] = [-3.7038, 40.4168];
@@ -50,6 +52,8 @@ export function MapWorkspace() {
   const [drawPointCount, setDrawPointCount] = useState(0);
   const [view3D, setView3D] = useState(false);
   const [busyOsm, setBusyOsm] = useState(false);
+  const [busyGoogle, setBusyGoogle] = useState(false);
+  const [googleQuality, setGoogleQuality] = useState<string | null>(null);
   const project = useProjectState();
 
   useEffect(() => {
@@ -343,6 +347,60 @@ export function MapWorkspace() {
       status: "computing",
     });
     await runLayoutAndPvgis();
+  };
+
+  const detectWithGoogleSolar = async () => {
+    const center = project.centroid ?? null;
+    if (!center) return;
+    setBusyGoogle(true);
+    setGoogleQuality(null);
+    try {
+      const res = await fetch(
+        `/api/google-solar/building-insights?lat=${center.lat}&lon=${center.lon}&quality=LOW`,
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error ?? "Google Solar: error");
+      }
+      const data = (await res.json()) as {
+        imageryQuality: string;
+        planes: Array<{
+          id: string;
+          label: string;
+          polygon: GeoJSON.Polygon;
+          tiltDeg: number;
+          azimuthDeg: number;
+          areaM2: number;
+        }>;
+      };
+      setGoogleQuality(data.imageryQuality);
+
+      // Sustituir faldones existentes por los detectados.
+      clearRoofPlanes();
+      const planes: RoofPlane[] = data.planes.map((p) => ({
+        id:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : p.id,
+        label: p.label,
+        polygon: p.polygon,
+        tiltDeg: p.tiltDeg,
+        // Google Solar usa convención: 0° = Norte, 90° = Este, 180° = Sur, 270° = Oeste.
+        // Coincide con la nuestra: ya está bien.
+        azimuthDeg: p.azimuthDeg,
+        obstacles: [],
+        enabled: true,
+      }));
+      setState({ roofPlanes: planes });
+      await runLayoutAndPvgis();
+    } catch (err) {
+      setState({
+        status: "error",
+        error: err instanceof Error ? err.message : "Error Google Solar",
+      });
+    } finally {
+      setBusyGoogle(false);
+    }
   };
 
   const loadFromOSM = async () => {
@@ -654,6 +712,30 @@ export function MapWorkspace() {
             >
               {busyOsm ? "Cargando OSM…" : "Usar OSM"}
             </button>
+          )}
+          {project.centroid && (
+            <button
+              type="button"
+              onClick={() => void detectWithGoogleSolar()}
+              disabled={busyGoogle}
+              className="rounded-md bg-gradient-to-r from-sky-500 to-violet-500 px-3 py-1.5 text-xs font-medium text-white shadow ring-1 ring-white/10 hover:opacity-90 disabled:opacity-40"
+              title="Google Solar IA: detecta cada plano del tejado con su pitch y azimut reales. ~0,10-5 € por consulta."
+            >
+              {busyGoogle ? "Analizando techo…" : "🛰 Detectar techo (Google AI)"}
+            </button>
+          )}
+          {googleQuality && (
+            <p
+              className={`rounded-md px-2 py-1 text-[10px] text-center font-medium ${
+                googleQuality === "HIGH"
+                  ? "bg-emerald-500/30 text-emerald-100"
+                  : googleQuality === "MEDIUM"
+                    ? "bg-amber-500/30 text-amber-100"
+                    : "bg-slate-500/30 text-slate-200"
+              }`}
+            >
+              Google Solar: calidad {googleQuality}
+            </p>
           )}
           <button
             type="button"

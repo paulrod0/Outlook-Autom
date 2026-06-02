@@ -245,6 +245,8 @@ export function ProjectPanel() {
 
       <StructuralSection structural={s.structural} />
 
+      <SolarEdgeSection />
+
       <SavedProjectsSection canSave={!!s.parcelGeometry} />
 
       <div className="flex flex-col gap-2">
@@ -991,6 +993,159 @@ function CommunitySection({
         </div>
       )}
     </Section>
+  );
+}
+
+type SolarEdgeSite = {
+  id: string;
+  se_site_id: string;
+  name: string | null;
+  installed_kwp: string | number | null;
+  commissioned_at: string | null;
+  last_sync_at: string | null;
+  project_id: string | null;
+};
+
+function SolarEdgeSection() {
+  const [sites, setSites] = useState<SolarEdgeSite[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void fetch("/api/solaredge/sites")
+      .then(async (r) => {
+        if (r.status === 501) return [];
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return (await r.json()) as SolarEdgeSite[];
+      })
+      .then((data) => setSites(Array.isArray(data) ? data : []))
+      .catch((e) => setErr(e instanceof Error ? e.message : "Error"));
+  }, []);
+
+  if (sites === null) return null; // aún cargando
+  if (sites.length === 0 && !err) return null; // no hay nada que mostrar
+
+  const refreshSites = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch("/api/solaredge/sites?refresh=1");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setSites((await r.json()) as SolarEdgeSite[]);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title={`SolarEdge (${sites.length})`}>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex-1 rounded-md bg-optimus-navyDeep/60 px-2 py-1.5 text-xs font-medium text-slate-200 ring-1 ring-white/10 hover:bg-optimus-navyDeep"
+        >
+          {open ? "Ocultar plantas" : "Ver plantas reales"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void refreshSites()}
+          disabled={busy}
+          className="rounded-md bg-optimus-navyDeep/60 px-2 py-1.5 text-xs text-slate-300 ring-1 ring-white/10 hover:bg-optimus-navyDeep disabled:opacity-40"
+          title="Recargar lista de sites desde SolarEdge"
+        >
+          {busy ? "…" : "↻"}
+        </button>
+      </div>
+      {err && (
+        <p className="rounded-md bg-rose-500/15 px-2 py-1 text-[10px] text-rose-300">
+          {err}
+        </p>
+      )}
+      {open && (
+        <div className="space-y-1.5">
+          {sites.map((s) => (
+            <SolarEdgeSiteRow key={s.id} site={s} />
+          ))}
+          <p className="text-[10px] leading-tight text-slate-500">
+            Datos sincronizados cada noche por cron. Para vincular esta cubierta
+            con una planta, guarda el proyecto y usa{" "}
+            <code>POST /api/solaredge/sites</code> con{" "}
+            <code>{`{seSiteId, projectId}`}</code>.
+          </p>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function SolarEdgeSiteRow({ site }: { site: SolarEdgeSite }) {
+  const [stats, setStats] = useState<{
+    days: number;
+    totalKwh: number;
+    lastDay: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    // Pedimos los últimos 30 días via un endpoint que ya tenemos: kpi
+    // pero kpi necesita projectId. Aquí queremos sólo la producción
+    // bruta. Por ahora calculamos a través de un fetch básico al
+    // monitoring (es mejor que abrir otro endpoint custom para este MVP).
+    const projectId = site.project_id;
+    if (!projectId) {
+      // Sin proyecto vinculado: mostramos solo metadata.
+      setStats({ days: 0, totalKwh: 0, lastDay: null });
+      return;
+    }
+    void fetch(`/api/solaredge/kpi/${projectId}`)
+      .then(async (r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return;
+        setStats({
+          days: d.windowDays ?? 0,
+          totalKwh: d.realKwhWindow ?? 0,
+          lastDay: d.windowLastDay ?? null,
+        });
+      });
+  }, [site.project_id]);
+
+  const installed = Number(site.installed_kwp) || 0;
+
+  return (
+    <div className="space-y-1 rounded-md bg-optimus-navyDeep/40 p-2 ring-1 ring-white/5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="truncate text-xs font-medium text-slate-100">
+          {site.name ?? `Site ${site.se_site_id}`}
+        </p>
+        <span className="text-[10px] text-slate-400">
+          {installed > 0 ? `${installed} kWp` : "—"}
+        </span>
+      </div>
+      <div className="flex items-center justify-between text-[10px] text-slate-400">
+        <span>ID {site.se_site_id}</span>
+        <span>
+          {site.last_sync_at
+            ? `sync ${new Date(site.last_sync_at).toLocaleDateString("es-ES")}`
+            : "sin sync"}
+        </span>
+      </div>
+      {stats && stats.totalKwh > 0 && (
+        <div className="rounded bg-optimus-cyan/15 px-2 py-1 text-[11px] text-optimus-cyanLight">
+          {stats.days} días · {Math.round(stats.totalKwh).toLocaleString("es-ES")} kWh
+          {installed > 0 && stats.days > 0 && (
+            <span className="ml-1 text-slate-300">
+              ({(stats.totalKwh / stats.days / installed).toFixed(2)} kWh/kWp·día)
+            </span>
+          )}
+        </div>
+      )}
+      {site.project_id === null && (
+        <p className="text-[10px] text-slate-500">Sin proyecto vinculado</p>
+      )}
+    </div>
   );
 }
 

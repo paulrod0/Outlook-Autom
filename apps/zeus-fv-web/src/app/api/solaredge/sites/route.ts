@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureSchema, getSql, isDbEnabled } from "@/lib/db";
-import { isSolarEdgeEnabled, listSites } from "@/lib/solaredge";
+import { getSite, isSolarEdgeEnabled, listSites } from "@/lib/solaredge";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,14 +25,28 @@ export async function GET(req: Request) {
     if (refresh && isSolarEdgeEnabled()) {
       const sites = await listSites();
       for (const s of sites) {
+        // /sites/list a veces devuelve peakPower=0; el dato fiable está en
+        // /site/{id}/details. Enriquecemos si falta o es 0.
+        let peakKwp = s.peakPower;
+        if (!peakKwp || peakKwp === 0) {
+          try {
+            const detail = await getSite(s.id);
+            peakKwp = detail.peakPower || peakKwp;
+          } catch {
+            // si /details falla, dejamos el valor 0 — un cron posterior lo refresca
+          }
+        }
         await sql`
           insert into solaredge_sites
             (se_site_id, name, installed_kwp, commissioned_at)
           values
-            (${s.id}, ${s.name}, ${s.peakPower}, ${s.installationDate ?? null})
+            (${s.id}, ${s.name}, ${peakKwp}, ${s.installationDate ?? null})
           on conflict (se_site_id) do update set
             name = excluded.name,
-            installed_kwp = excluded.installed_kwp,
+            installed_kwp = case
+              when excluded.installed_kwp > 0 then excluded.installed_kwp
+              else solaredge_sites.installed_kwp
+            end,
             commissioned_at = coalesce(excluded.commissioned_at, solaredge_sites.commissioned_at)
         `;
       }

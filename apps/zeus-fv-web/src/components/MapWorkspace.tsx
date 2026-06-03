@@ -520,11 +520,20 @@ export function MapWorkspace() {
       const patch: Record<string, unknown> = {};
       let modeMsg = "";
 
+      // Regla Optimus: descartar faldones orientados a NORTE (±45°), no son
+      // óptimos. Quedan creados pero desactivados para que el comercial
+      // pueda reactivarlos si quiere maximizar kWp bruto.
+      const isNorthFacing = (az: number) => az < 45 || az > 315;
+
+      // Regla Optimus: Comunidad Energética por referencia catastral →
+      // tope automático de 130 kWp/refcat.
+      patch.ceLimit = true;
+
       const pitchedSegments = a.segments.filter((s) => s.kind === "pitched");
 
       if (a.isPitched && pitchedSegments.length >= 1) {
-        // CUBIERTA INCLINADA → crear un faldón por segmento detectado,
-        // cada uno con su polígono, tilt y azimut reales.
+        // CUBIERTA INCLINADA → coplanar siguiendo cada faldón (más barato,
+        // más densidad). Un faldón por segmento, con su tilt/azimut reales.
         clearRoofPlanes();
         const planes: RoofPlane[] = pitchedSegments.map((s, i) => ({
           id:
@@ -536,17 +545,24 @@ export function MapWorkspace() {
           tiltDeg: s.tiltDeg,
           azimuthDeg: s.azimuthDeg,
           obstacles: [],
-          enabled: true,
+          enabled: !isNorthFacing(s.azimuthDeg),
         }));
         patch.roofPlanes = planes;
-        modeMsg = `${planes.length} faldón(es) segmentado(s)`;
+        const activos = planes.filter((p) => p.enabled).length;
+        const norte = planes.length - activos;
+        modeMsg =
+          `${activos} faldón(es) activos (coplanar)` +
+          (norte > 0 ? ` · ${norte} a norte descartado(s)` : "");
       } else {
-        // CUBIERTA PLANA → modo simple (un polígono, estructura inclinada).
+        // CUBIERTA PLANA → estructura inclinada al SUR (sur siempre que se
+        // pueda); en plana el tejado no da orientación, así que la fijamos.
         clearRoofPlanes();
         patch.roofPlanes = [];
+        patch.tiltDeg = 12;
+        patch.azimuthDeg = 180;
         if (hasPolygon && !lidarOverridesPolygon) {
           // Catastro alineado: conservamos la cubierta del usuario.
-          modeMsg = "plana confirmada · se mantiene tu polígono";
+          modeMsg = "plana · estructura inclinada al Sur · se mantiene tu polígono";
         } else {
           // Modo edificio aislado: aplicamos la huella detectada.
           let footprintApplied = false;
@@ -563,10 +579,10 @@ export function MapWorkspace() {
             }
           }
           modeMsg = footprintApplied
-            ? "huella real aplicada"
+            ? "Sur · huella real aplicada"
             : a.footprintTouchesEdge
-              ? "huella parcial (edificio mayor que el área analizada)"
-              : "sin huella fiable";
+              ? "Sur · huella parcial (edificio mayor que el área analizada)"
+              : "Sur · sin huella fiable";
         }
       }
 
@@ -575,8 +591,8 @@ export function MapWorkspace() {
 
       setLidarInfo(
         a.isPitched
-          ? `Inclinada · ${a.dominantTiltDeg}° · azimut ${a.dominantAzimuthDeg ?? "—"}° · ${a.buildingHeightM} m · ${modeMsg}`
-          : `Plana · ${a.buildingHeightM} m · ${modeMsg}`,
+          ? `Inclinada · ${a.dominantTiltDeg}° · azimut ${a.dominantAzimuthDeg ?? "—"}° · ${a.buildingHeightM} m · CE 130 kWp · ${modeMsg}`
+          : `Plana · ${a.buildingHeightM} m · CE 130 kWp · ${modeMsg}`,
       );
     } catch (err) {
       setLidarInfo(

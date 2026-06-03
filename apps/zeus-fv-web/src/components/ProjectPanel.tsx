@@ -208,6 +208,13 @@ export function ProjectPanel() {
           value={fmt(s.pvgis?.specificYield, 0)}
           unit="kWh/kWp·año"
         />
+        {(s.parcelAreaM2 ?? 0) > 500 && (
+          <p className="rounded-md bg-amber-500/15 px-2 py-1.5 text-[10px] leading-tight text-amber-200">
+            🔥 RSCIEI (RD 164/2025) aplicado: franja perimetral libre de 1 m +
+            agrupaciones de máx. 45×45 m con pasillos cortafuegos de 1,2 m
+            (instalación &gt; 500 m²).
+          </p>
+        )}
       </Section>
 
       <BillSection bill={s.bill} pvgisYield={s.pvgis?.specificYield} />

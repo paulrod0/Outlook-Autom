@@ -42,13 +42,13 @@ export type LayoutInput = {
   /** Obstáculos a respetar (skylights, HVAC, chimeneas). */
   obstacles?: GeoJSON.Polygon[];
   /**
-   * Lado del bloque de paneles antes de un pasillo cortafuegos.
-   * CTE DB-SI recomienda bloques de ≤ 40 m con pasillo de ≥ 1 m.
-   * Si se omite, se usa 40 m para polígonos > 1.000 m² y desactivado
-   * para polígonos más pequeños (doméstico).
+   * Lado de la agrupación de paneles antes de un pasillo cortafuegos.
+   * RSCIEI (RD 164/2025): instalaciones con lado > 45 m se dividen en
+   * agrupaciones de máx. 45 × 45 m. Si se omite, se usa 45 m para
+   * instalaciones > 500 m² y se desactiva en doméstico.
    */
   aisleBlockSideM?: number;
-  /** Ancho del pasillo cortafuegos (m). Default 1,2 m. */
+  /** Ancho del pasillo cortafuegos (m). RSCIEI: ≥ 1,2 m. Default 1,2 m. */
   aisleWidthM?: number;
 };
 
@@ -154,12 +154,10 @@ export function computeLayout(input: LayoutInput): LayoutResult {
     }
   }
 
-  // 2b) Margen al borde real: lo que pida el usuario + un mínimo según escala
-  //     (CTE DB-SI: separación ≥ 0,5 m del borde; instalación grande pide más).
-  const minEdgeForScale =
-    polygonArea > 20000 ? 2.5 :
-    polygonArea > 5000 ? 1.5 :
-    0.5;
+  // 2b) Franja perimetral libre (RSCIEI, RD 164/2025): obligatoria ≥ 1 m
+  //     cuando la instalación supera 500 m². Por debajo (residencial)
+  //     basta con el margen que pida el usuario (mín. 0,5 m práctico).
+  const minEdgeForScale = polygonArea > 500 ? 1.0 : 0.5;
   const effectiveEdge = Math.max(Math.abs(edgeMarginM), minEdgeForScale);
 
   // 2c) Buffer interior con el margen efectivo.
@@ -214,11 +212,13 @@ export function computeLayout(input: LayoutInput): LayoutResult {
   const cx = (utmMinX + utmMaxX) / 2;
   const cy = (utmMinY + utmMaxY) / 2;
 
-  // 5b) Bloques con pasillo cortafuegos (CTE DB-SI). Bloque máx 40 m + 1,2 m
-  //     de pasillo. Sólo se activa para polígonos > 1.000 m² (industrial /
-  //     PyME); en doméstico no tiene sentido.
+  // 5b) Agrupaciones con pasillo cortafuegos (RSCIEI, RD 164/2025):
+  //     instalaciones cuyo lado supere 45 m deben dividirse en agrupaciones
+  //     de máx. 45 × 45 m separadas por franjas de ≥ 1,2 m. Activamos los
+  //     bloques de 45 m para cualquier instalación > 500 m² (las pequeñas
+  //     caben en un bloque y no muestran pasillos). En doméstico, off.
   const aisleBlockSide =
-    input.aisleBlockSideM ?? (polygonArea > 1000 ? 40 : 0);
+    input.aisleBlockSideM ?? (polygonArea > 500 ? 45 : 0);
   const aisleWidth = input.aisleWidthM ?? 1.2;
 
   // 6) Búsqueda: probar rotaciones cada 5° en [0°, 90°) (más allá repite),

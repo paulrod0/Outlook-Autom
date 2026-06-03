@@ -36,8 +36,22 @@ export type LayoutInput = {
   azimuthDeg: number;
   edgeMarginM: number;
   rowSpacingM?: number;
-  /** Separación adicional entre columnas (m). Default 0 = paneles pegados. */
+  /** Separación adicional entre columnas (m). Default 0,02 m (2 cm). */
   columnGapM?: number;
+  /**
+   * Estructura de montaje:
+   *  - "coplanar": paneles tumbados siguiendo la pendiente del tejado.
+   *    No hay sombra entre filas → pitch mínimo (caben más, más barato).
+   *  - "inclined": estructura triangular que levanta los paneles sobre
+   *    cubierta plana → pitch por sombra de solsticio.
+   * Si se omite, se decide por el tilt: ≥5° → coplanar; <5° → inclined.
+   */
+  structure?: "coplanar" | "inclined";
+  /**
+   * Orientación del módulo: "landscape" (tumbado), "portrait" (de pie) o
+   * "auto" (prueba ambas y se queda con la que más paneles coloque).
+   */
+  orientation?: "landscape" | "portrait" | "auto";
   maxKwp?: number;
   /** Obstáculos a respetar (skylights, HVAC, chimeneas). */
   obstacles?: GeoJSON.Polygon[];
@@ -197,69 +211,87 @@ export function computeLayout(input: LayoutInput): LayoutResult {
   // 3) Reproyectar polígono útil a UTM.
   const usableUtm = reprojectPolygon(usableLngLat, "EPSG:4326", utm);
 
-  // 4) Separación entre filas (regla solsticio invierno) en metros.
-  const rowSpacing =
-    input.rowSpacingM && input.rowSpacingM > 0
-      ? input.rowSpacingM
-      : computeRowSpacing(latC, panel.heightM, tiltDeg);
+  // 4) Estructura de montaje. Por defecto: coplanar si el tejado tiene
+  //    pendiente real (≥5°), inclinada si es ~plano. Coplanar es más
+  //    barato y no necesita hueco de sombra → caben más paneles.
+  const structure: "coplanar" | "inclined" =
+    input.structure ?? (tiltDeg >= 5 ? "coplanar" : "inclined");
 
-  const columnGap = Math.max(0, input.columnGapM ?? 0);
-  const stepX = panel.widthM + columnGap;
-  const stepY = rowSpacing;
+  const columnGap = Math.max(0, input.columnGapM ?? 0.02);
 
   // 5) Centro fijo en UTM sobre el que rotamos el grid.
   const [utmMinX, utmMinY, utmMaxX, utmMaxY] = bboxOfUtmGeom(usableUtm);
   const cx = (utmMinX + utmMaxX) / 2;
   const cy = (utmMinY + utmMaxY) / 2;
 
-  // 5b) Agrupaciones con pasillo cortafuegos (RSCIEI, RD 164/2025):
-  //     instalaciones cuyo lado supere 45 m deben dividirse en agrupaciones
-  //     de máx. 45 × 45 m separadas por franjas de ≥ 1,2 m. Activamos los
-  //     bloques de 45 m para cualquier instalación > 500 m² (las pequeñas
-  //     caben en un bloque y no muestran pasillos). En doméstico, off.
+  // 5b) Agrupaciones con pasillo cortafuegos (RSCIEI, RD 164/2025): 45×45 m
+  //     con franjas ≥1,2 m para instalaciones >500 m².
   const aisleBlockSide =
     input.aisleBlockSideM ?? (polygonArea > 500 ? 45 : 0);
   const aisleWidth = input.aisleWidthM ?? 1.2;
 
-  // 6) Búsqueda: probar rotaciones cada 5° en [0°, 90°) (más allá repite),
-  //    y para cada rotación varios offsets pequeños. Nos quedamos con la
-  //    combinación que coloque más paneles.
+  // 6) Orientaciones a probar (landscape / portrait / ambas si "auto").
+  const orientationMode = input.orientation ?? "auto";
+  const orientations: Array<"landscape" | "portrait"> =
+    orientationMode === "auto"
+      ? ["landscape", "portrait"]
+      : [orientationMode];
+
   const rotationCandidates: number[] = [];
   for (let a = 0; a < 90; a += 5) rotationCandidates.push(a);
 
   let bestPanels: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
   let bestRotation = 0;
+  let bestRowSpacing = 0;
 
-  for (const rotationDeg of rotationCandidates) {
-    const theta = deg2rad(rotationDeg);
-    const cos = Math.cos(theta);
-    const sin = Math.sin(theta);
+  for (const orient of orientations) {
+    // across = eje de la fila (ancho), depth = fondo de fila (a lo largo
+    // de la pendiente). En landscape el lado largo va horizontal.
+    const acrossM = orient === "landscape" ? panel.heightM : panel.widthM;
+    const depthM = orient === "landscape" ? panel.widthM : panel.heightM;
 
-    // Bounding box del polígono expresado en el frame local del grid
-    // (rotado -theta respecto a UTM, con origen en (cx,cy)). Acota el barrido.
-    const [umin, vmin, umax, vmax] = bboxInLocalFrame(usableUtm, cx, cy, theta);
+    // Pitch de fila: coplanar → sólo separación física; inclinada →
+    // separación de sombra de solsticio sobre el fondo del módulo.
+    const rowSpacing =
+      input.rowSpacingM && input.rowSpacingM > 0
+        ? input.rowSpacingM
+        : structure === "coplanar"
+          ? depthM + 0.02
+          : computeRowSpacing(latC, depthM, tiltDeg);
 
-    for (let dy = 0; dy < stepY; dy += stepY / 3) {
-      for (let dx = 0; dx < stepX; dx += stepX / 2) {
-        const panels = generateGrid(
-          usableUtm,
-          panel,
-          umin + dx,
-          vmin + dy,
-          umax,
-          vmax,
-          stepX,
-          stepY,
-          cos,
-          sin,
-          cx,
-          cy,
-          aisleBlockSide,
-          aisleWidth,
-        );
-        if (panels.length > bestPanels.length) {
-          bestPanels = panels;
-          bestRotation = rotationDeg;
+    const stepX = acrossM + columnGap;
+    const stepY = rowSpacing;
+
+    for (const rotationDeg of rotationCandidates) {
+      const theta = deg2rad(rotationDeg);
+      const cos = Math.cos(theta);
+      const sin = Math.sin(theta);
+      const [umin, vmin, umax, vmax] = bboxInLocalFrame(usableUtm, cx, cy, theta);
+
+      for (let dy = 0; dy < stepY; dy += stepY / 3) {
+        for (let dx = 0; dx < stepX; dx += stepX / 2) {
+          const panels = generateGrid(
+            usableUtm,
+            acrossM,
+            depthM,
+            umin + dx,
+            vmin + dy,
+            umax,
+            vmax,
+            stepX,
+            stepY,
+            cos,
+            sin,
+            cx,
+            cy,
+            aisleBlockSide,
+            aisleWidth,
+          );
+          if (panels.length > bestPanels.length) {
+            bestPanels = panels;
+            bestRotation = rotationDeg;
+            bestRowSpacing = rowSpacing;
+          }
         }
       }
     }
@@ -283,14 +315,15 @@ export function computeLayout(input: LayoutInput): LayoutResult {
     peakPowerKwp: Number(peakPowerKwp.toFixed(2)),
     panels: limited,
     usableAreaM2: Number(usableAreaM2.toFixed(1)),
-    rowSpacingM: Number(rowSpacing.toFixed(2)),
+    rowSpacingM: Number(bestRowSpacing.toFixed(2)),
     gridRotationDeg: bestRotation,
   };
 }
 
 function generateGrid(
   usableUtm: GeoJSON.Polygon | GeoJSON.MultiPolygon,
-  panel: PanelModel,
+  acrossM: number, // dimensión del panel en el eje u (ancho de fila)
+  depthM: number, // dimensión del panel en el eje v (fondo de fila)
   uStart: number,
   vStart: number,
   uEnd: number,
@@ -314,7 +347,7 @@ function generateGrid(
     if (useBlocks) {
       const vOffset = v - vStart;
       const positionInBlockV = vOffset - Math.floor(vOffset / aisleBlockSideM) * aisleBlockSideM;
-      if (positionInBlockV + panel.heightM > aisleBlockSideM - aisleWidthM) {
+      if (positionInBlockV + depthM > aisleBlockSideM - aisleWidthM) {
         continue; // panel quedaría dentro del pasillo en V
       }
     }
@@ -322,20 +355,11 @@ function generateGrid(
       if (useBlocks) {
         const uOffset = u - uStart;
         const positionInBlockU = uOffset - Math.floor(uOffset / aisleBlockSideM) * aisleBlockSideM;
-        if (positionInBlockU + panel.widthM > aisleBlockSideM - aisleWidthM) {
+        if (positionInBlockU + acrossM > aisleBlockSideM - aisleWidthM) {
           continue; // panel quedaría dentro del pasillo en U
         }
       }
-      const rect = panelRectangleAt(
-        u,
-        v,
-        panel.widthM,
-        panel.heightM,
-        cos,
-        sin,
-        cx,
-        cy,
-      );
+      const rect = panelRectangleAt(u, v, acrossM, depthM, cos, sin, cx, cy);
       if (allCornersInside(rect, usableUtm)) {
         panels.push(turf.polygon([rect]));
       }

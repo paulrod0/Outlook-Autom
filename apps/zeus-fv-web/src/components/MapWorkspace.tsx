@@ -531,22 +531,62 @@ export function MapWorkspace() {
 
       const pitchedSegments = a.segments.filter((s) => s.kind === "pitched");
 
+      // Recorta un faldón al polígono de la cubierta cargada para que NUNCA
+      // se salga a tejados vecinos (anclaje al polígono/referencia).
+      const clipToParcel = (poly: GeoJSON.Polygon): GeoJSON.Polygon | null => {
+        if (!project.parcelGeometry) return poly;
+        try {
+          const inter = turf.intersect(
+            turf.featureCollection([
+              turf.feature(poly),
+              turf.feature(project.parcelGeometry),
+            ]),
+          );
+          if (!inter || !inter.geometry) return null;
+          if (inter.geometry.type === "Polygon") return inter.geometry;
+          if (inter.geometry.type === "MultiPolygon") {
+            // Quedarnos con el anillo de mayor área.
+            let best: GeoJSON.Polygon | null = null;
+            let bestA = 0;
+            for (const coords of inter.geometry.coordinates) {
+              const p: GeoJSON.Polygon = { type: "Polygon", coordinates: coords };
+              const a2 = turf.area(turf.feature(p));
+              if (a2 > bestA) {
+                bestA = a2;
+                best = p;
+              }
+            }
+            return best;
+          }
+          return null;
+        } catch {
+          return poly;
+        }
+      };
+
       if (a.isPitched && pitchedSegments.length >= 1) {
         // CUBIERTA INCLINADA → coplanar siguiendo cada faldón (más barato,
-        // más densidad). Un faldón por segmento, con su tilt/azimut reales.
+        // más densidad). Un faldón por segmento, con su tilt/azimut reales,
+        // recortado al polígono cargado (sin desplazarse a vecinos).
         clearRoofPlanes();
-        const planes: RoofPlane[] = pitchedSegments.map((s, i) => ({
-          id:
-            typeof crypto !== "undefined" && "randomUUID" in crypto
-              ? crypto.randomUUID()
-              : `lidar-${i}`,
-          label: s.label,
-          polygon: simplifyPoly(s.polygon),
-          tiltDeg: s.tiltDeg,
-          azimuthDeg: s.azimuthDeg,
-          obstacles: [],
-          enabled: !isNorthFacing(s.azimuthDeg),
-        }));
+        const planes: RoofPlane[] = pitchedSegments
+          .map((s, i) => {
+            const clipped = clipToParcel(simplifyPoly(s.polygon));
+            if (!clipped) return null;
+            return {
+              id:
+                typeof crypto !== "undefined" && "randomUUID" in crypto
+                  ? crypto.randomUUID()
+                  : `lidar-${i}`,
+              label: s.label,
+              polygon: clipped,
+              tiltDeg: s.tiltDeg,
+              azimuthDeg: s.azimuthDeg,
+              obstacles: [],
+              enabled: !isNorthFacing(s.azimuthDeg),
+            } as RoofPlane;
+          })
+          .filter((p): p is RoofPlane => p !== null);
         patch.roofPlanes = planes;
         const activos = planes.filter((p) => p.enabled).length;
         const norte = planes.length - activos;

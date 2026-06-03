@@ -308,55 +308,42 @@ export async function analyzeRoof(
     boxM,
   );
 
-  // Altura del edificio: usamos la mediana de las celdas claramente
-  // elevadas para fijar el umbral de "es edificio".
-  const heights = z.flat().filter((v) => v > 0);
-  const maxH = heights.length ? Math.max(...heights) : 0;
-  const threshold = Math.max(2, maxH * 0.3);
-
-  const mask = z.map((row) => row.map((v) => v >= threshold));
-
-  // Apertura morfológica (erosión + dilatación) para separar edificios
-  // que se tocan por <5 m a la resolución de 2,5 m.
-  const opened = morphOpen(mask);
-
-  // Selección del edificio objetivo. Estrategia adaptativa porque el
-  // polígono de Catastro suele estar DESALINEADO respecto al edificio real
-  // (el LiDAR sí coincide con la imagen):
-  //  - Si el polígono del usuario contiene suficientes celdas de edificio
-  //    (Catastro bien alineado) → restringir a ese polígono.
-  //  - Si no (Catastro desalineado, o sin polígono) → usar la componente
-  //    conexa real del LiDAR cerca del centro (la realidad manda).
+  // Selección del edificio objetivo.
   let comp: boolean[][];
   let selectionMode: "polygon" | "lidar-component" = "lidar-component";
 
   if (polygon) {
+    // CON POLÍGONO → el análisis se ANCLA SIEMPRE al polígono cargado
+    // (referencia catastral / punto / trazado). No saltamos nunca a
+    // edificios vecinos: las celdas de edificio se toman SÓLO dentro del
+    // polígono y el umbral de altura se calcula con las alturas de DENTRO
+    // del polígono (no de toda la zona, para no contaminar con vecinos altos).
     const ringsUtm = polygonRingsToUtm(polygon);
-    let inPolyElevated = 0;
-    let inPolyTotal = 0;
-    const inPoly = mask.map((row, r) =>
-      row.map((isBuilding, c) => {
+    const insideMask = z.map((row, r) =>
+      row.map((_v, c) => {
         const E = originE + (c + 0.5) * CELL_M;
         const N = originN - (r + 0.5) * CELL_M;
-        const ins = pointInRings(E, N, ringsUtm);
-        if (ins) {
-          inPolyTotal++;
-          if (isBuilding) inPolyElevated++;
-        }
-        return ins && isBuilding;
+        return pointInRings(E, N, ringsUtm);
       }),
     );
-    // ¿Catastro coincide con el edificio? (≥40 celdas y ≥30% del polígono).
-    const aligned =
-      inPolyElevated >= 40 && inPolyElevated / Math.max(1, inPolyTotal) >= 0.3;
-    if (aligned) {
-      comp = inPoly;
-      selectionMode = "polygon";
-    } else {
-      comp = largestComponentAtCenter(opened);
-    }
+    const insideHeights: number[] = [];
+    for (let r = 0; r < height; r++)
+      for (let c = 0; c < width; c++)
+        if (insideMask[r][c] && z[r][c] > 0) insideHeights.push(z[r][c]);
+    const maxHIn = insideHeights.length ? Math.max(...insideHeights) : 0;
+    const thrIn = Math.max(2, maxHIn * 0.3);
+    comp = z.map((row, r) =>
+      row.map((v, c) => insideMask[r][c] && v >= thrIn),
+    );
+    selectionMode = "polygon";
   } else {
-    comp = largestComponentAtCenter(opened);
+    // SIN POLÍGONO (modo edificio aislado) → componente conexa del centro,
+    // con apertura morfológica para separar vecinos pegados.
+    const heights = z.flat().filter((v) => v > 0);
+    const maxH = heights.length ? Math.max(...heights) : 0;
+    const threshold = Math.max(2, maxH * 0.3);
+    const mask = z.map((row) => row.map((v) => v >= threshold));
+    comp = largestComponentAtCenter(morphOpen(mask));
   }
   void selectionMode;
 

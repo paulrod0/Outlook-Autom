@@ -67,7 +67,24 @@ export function MapWorkspace() {
   const [googleQuality, setGoogleQuality] = useState<string | null>(null);
   const [busyLidar, setBusyLidar] = useState(false);
   const [lidarInfo, setLidarInfo] = useState<string | null>(null);
+  const [basemap, setBasemap] = useState<"pnoa" | "esri">("pnoa");
   const project = useProjectState();
+
+  // Alternar mapa base PNOA (IGN, casa con Catastro) ↔ Esri.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    map.setLayoutProperty(
+      "satellite-pnoa",
+      "visibility",
+      basemap === "pnoa" ? "visible" : "none",
+    );
+    map.setLayoutProperty(
+      "satellite-esri",
+      "visibility",
+      basemap === "esri" ? "visible" : "none",
+    );
+  }, [basemap, ready]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -77,7 +94,24 @@ export function MapWorkspace() {
       preserveDrawingBuffer: true, // permite map.getCanvas().toDataURL() para el PDF
       style: {
         version: 8,
+        // Fuentes de glifos para las etiquetas de texto (cotas, faldones).
+        glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
         sources: {
+          // PNOA (IGN España): ortofoto oficial. Misma fuente geodésica que
+          // Catastro y el LiDAR → el polígono, los faldones y la imagen casan
+          // sin desfase. Es el mapa base por defecto en España.
+          "pnoa-ma": {
+            type: "raster",
+            tiles: [
+              "https://www.ign.es/wms-inspire/pnoa-ma?service=WMS&request=GetMap&version=1.3.0&layers=OI.OrthoimageCoverage&styles=&format=image/jpeg&transparent=false&crs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}",
+            ],
+            tileSize: 256,
+            attribution:
+              'PNOA &copy; <a href="https://www.ign.es/">Instituto Geográfico Nacional</a>',
+            maxzoom: 20,
+          },
+          // Esri World Imagery: alternativa (a veces más reciente, pero puede
+          // tener desfase geodésico frente a Catastro en España).
           "esri-world-imagery": {
             type: "raster",
             tiles: [
@@ -89,7 +123,15 @@ export function MapWorkspace() {
             maxzoom: 19,
           },
         },
-        layers: [{ id: "satellite", type: "raster", source: "esri-world-imagery" }],
+        layers: [
+          { id: "satellite-pnoa", type: "raster", source: "pnoa-ma" },
+          {
+            id: "satellite-esri",
+            type: "raster",
+            source: "esri-world-imagery",
+            layout: { visibility: "none" },
+          },
+        ],
       },
       center: DEFAULT_CENTER,
       zoom: DEFAULT_ZOOM,
@@ -897,6 +939,19 @@ export function MapWorkspace() {
       </div>
       {/* Columna única de acciones en la esquina superior derecha */}
       <div className="absolute bottom-16 right-3 z-10 flex w-48 flex-col gap-2 md:bottom-auto md:right-4 md:top-4 md:w-52">
+        {/* Toggle mapa base PNOA (alineado con Catastro) ↔ Esri */}
+        <button
+          type="button"
+          onClick={() => setBasemap((b) => (b === "pnoa" ? "esri" : "pnoa"))}
+          className="self-end rounded-md bg-optimus-navy/95 px-3 py-1.5 text-xs font-medium text-slate-100 shadow ring-1 ring-white/10 hover:bg-optimus-navy"
+          title={
+            basemap === "pnoa"
+              ? "Usando PNOA (IGN), alineado con Catastro. Pulsa para Esri."
+              : "Usando Esri. Pulsa para PNOA (IGN), alineado con Catastro."
+          }
+        >
+          Mapa: {basemap === "pnoa" ? "PNOA (IGN)" : "Esri"}
+        </button>
         {/* Toggle 2D / 3D (siempre visible) */}
         {canEdit && (
           <button

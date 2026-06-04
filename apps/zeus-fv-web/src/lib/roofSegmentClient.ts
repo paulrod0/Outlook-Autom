@@ -1,53 +1,56 @@
-import "server-only";
+"use client";
 
-import * as ort from "onnxruntime-node";
-import jpeg from "jpeg-js";
+import * as ort from "onnxruntime-web";
 
 /**
- * Segmentación de tejado con IA (MobileSAM) sobre la ortofoto PNOA.
+ * Detección de tejado con IA (MobileSAM) EN EL NAVEGADOR.
  *
- * Es nuestro "click-to-segment" tipo SolarEdge/Google pero local y gratis:
- * dado un punto (centroide de la cubierta), descarga la imagen aérea PNOA,
- * la pasa por el encoder+decoder de MobileSAM con ese punto como prompt y
- * devuelve el polígono exacto del tejado, alineado al píxel con la imagen.
+ * onnxruntime-web está diseñado para correr en el navegador (WASM), donde
+ * sí puede cargar los .wasm por https y no hay límite de tamaño serverless.
+ * Aquí: descargamos la ortofoto PNOA (vía proxy), la pasamos por
+ * encoder+decoder de MobileSAM con el punto central como prompt, y
+ * devolvemos el polígono exacto del tejado en lon/lat.
  *
- * MobileSAM (~37 MB ONNX) corre en CPU vía onnxruntime-node. Las sesiones
- * se cachean en memoria (warm entre peticiones con Fluid Compute).
+ * Los modelos (~37 MB) se descargan una vez de /public/models/sam y se
+ * cachean en memoria + en la caché del navegador.
  */
 
 const PX = 1024;
 
+ort.env.wasm.wasmPaths =
+  "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
+
 let encoderSession: ort.InferenceSession | null = null;
 let decoderSession: ort.InferenceSession | null = null;
+let loadingPromise: Promise<void> | null = null;
 
-async function loadModel(origin: string, file: string): Promise<Uint8Array> {
-  // no-store: el modelo (>2MB) no cabe en la fetch-cache de Next; lo
-  // mantenemos en memoria vía las sesiones cacheadas a nivel de módulo.
-  const res = await fetch(new URL(`/models/sam/${file}`, origin).href, {
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`No se pudo cargar ${file} (${res.status})`);
-  return new Uint8Array(await res.arrayBuffer());
-}
-
-async function ensureSessions(origin: string) {
+async function ensureSessions(onProgress?: (msg: string) => void) {
   if (encoderSession && decoderSession) return;
-  const [enc, dec] = await Promise.all([
-    loadModel(origin, "mobilesam.encoder.onnx"),
-    loadModel(origin, "mobilesam.decoder.onnx"),
-  ]);
-  encoderSession ??= await ort.InferenceSession.create(enc);
-  decoderSession ??= await ort.InferenceSession.create(dec);
+  if (!loadingPromise) {
+    loadingPromise = (async () => {
+      onProgress?.("Descargando modelo IA (37 MB, primera vez)…");
+      const [encBuf, decBuf] = await Promise.all([
+        fetch("/models/sam/mobilesam.encoder.onnx").then((r) => r.arrayBuffer()),
+        fetch("/models/sam/mobilesam.decoder.onnx").then((r) => r.arrayBuffer()),
+      ]);
+      onProgress?.("Inicializando IA…");
+      encoderSession = await ort.InferenceSession.create(encBuf, {
+        executionProviders: ["wasm"],
+      });
+      decoderSession = await ort.InferenceSession.create(decBuf, {
+        executionProviders: ["wasm"],
+      });
+    })();
+  }
+  await loadingPromise;
 }
 
-// lon/lat → EPSG:3857
 function to3857(lon: number, lat: number): [number, number] {
   const x = (lon * 20037508.34) / 180;
   let y = Math.log(Math.tan(((90 + lat) * Math.PI) / 360)) / (Math.PI / 180);
   y = (y * 20037508.34) / 180;
   return [x, y];
 }
-// EPSG:3857 → lon/lat
 function from3857(x: number, y: number): [number, number] {
   const lon = (x / 20037508.34) * 180;
   let lat = (y / 20037508.34) * 180;
@@ -60,71 +63,68 @@ function from3857(x: number, y: number): [number, number] {
 export type RoofSegmentResult = {
   polygon: GeoJSON.Polygon;
   iou: number;
-  coveragePct: number;
 };
 
-export async function segmentRoof(
-  origin: string,
+export async function segmentRoofClient(
   lat: number,
   lon: number,
   boxM = 80,
+  onProgress?: (msg: string) => void,
 ): Promise<RoofSegmentResult | null> {
-  await ensureSessions(origin);
+  await ensureSessions(onProgress);
+  onProgress?.("Descargando imagen aérea…");
 
-  // 1) Caja EPSG:3857 alrededor del punto + imagen PNOA 1024².
   const [cx, cy] = to3857(lon, lat);
   const half = boxM / 2;
   const minX = cx - half,
     maxX = cx + half,
     minY = cy - half,
     maxY = cy + half;
-  const url =
-    "https://www.ign.es/wms-inspire/pnoa-ma?service=WMS&request=GetMap&version=1.3.0" +
-    "&layers=OI.OrthoimageCoverage&styles=&format=image/jpeg&transparent=false" +
-    `&crs=EPSG:3857&width=${PX}&height=${PX}&bbox=${minX},${minY},${maxX},${maxY}`;
+  const bbox = `${minX},${minY},${maxX},${maxY}`;
 
-  const imgRes = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0", Accept: "image/jpeg" },
-    cache: "no-store",
+  // Imagen PNOA → ImageBitmap → canvas → píxeles.
+  const blob = await fetch(`/api/pnoa-image?bbox=${bbox}&px=${PX}`).then((r) => {
+    if (!r.ok) throw new Error(`PNOA ${r.status}`);
+    return r.blob();
   });
-  if (!imgRes.ok) throw new Error(`PNOA GetMap ${imgRes.status}`);
-  const { data, width, height } = jpeg.decode(
-    Buffer.from(await imgRes.arrayBuffer()),
-    { useTArray: true },
-  );
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = PX;
+  canvas.height = PX;
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(bitmap, 0, 0, PX, PX);
+  const imgData = ctx.getImageData(0, 0, PX, PX).data;
 
-  // 2) RGBA → [H,W,3] float para el encoder.
-  const rgb = new Float32Array(height * width * 3);
-  for (let i = 0, j = 0; i < data.length; i += 4) {
-    rgb[j++] = data[i];
-    rgb[j++] = data[i + 1];
-    rgb[j++] = data[i + 2];
+  const rgb = new Float32Array(PX * PX * 3);
+  for (let i = 0, j = 0; i < imgData.length; i += 4) {
+    rgb[j++] = imgData[i];
+    rgb[j++] = imgData[i + 1];
+    rgb[j++] = imgData[i + 2];
   }
-  const imageTensor = new ort.Tensor("float32", rgb, [height, width, 3]);
-  const enc = await encoderSession!.run({ input_image: imageTensor });
+
+  onProgress?.("Detectando tejado con IA…");
+  const enc = await encoderSession!.run({
+    input_image: new ort.Tensor("float32", rgb, [PX, PX, 3]),
+  });
   const embeddings = enc.image_embeddings;
 
-  // 3) Decoder con varios puntos foreground en el centro (la cubierta bajo
-  //    el marcador) para robustez.
   const c = PX / 2;
   const d = PX * 0.12;
-  const ptArr = new Float32Array([
-    c, c, c - d, c, c + d, c, c, c - d, c, c + d, 0, 0,
-  ]);
-  const lblArr = new Float32Array([1, 1, 1, 1, 1, -1]);
   const dec = await decoderSession!.run({
     image_embeddings: embeddings,
-    point_coords: new ort.Tensor("float32", ptArr, [1, 6, 2]),
-    point_labels: new ort.Tensor("float32", lblArr, [1, 6]),
+    point_coords: new ort.Tensor(
+      "float32",
+      new Float32Array([c, c, c - d, c, c + d, c, c, c - d, c, c + d, 0, 0]),
+      [1, 6, 2],
+    ),
+    point_labels: new ort.Tensor("float32", new Float32Array([1, 1, 1, 1, 1, -1]), [1, 6]),
     mask_input: new ort.Tensor("float32", new Float32Array(256 * 256), [1, 1, 256, 256]),
     has_mask_input: new ort.Tensor("float32", new Float32Array([0]), [1]),
     orig_im_size: new ort.Tensor("float32", new Float32Array([PX, PX]), [2]),
   });
-  const masks = dec.masks;
   const iou = (dec.iou_predictions.data as Float32Array)[0] ?? 0;
-  const maskData = masks.data as Float32Array; // [1,1,PX,PX]
+  const maskData = dec.masks.data as Float32Array;
 
-  // 4) Máscara booleana + componente conexa que contiene el centro.
   const mask: boolean[][] = [];
   let on = 0;
   for (let r = 0; r < PX; r++) {
@@ -137,30 +137,20 @@ export async function segmentRoof(
     mask.push(row);
   }
   if (on < 50) return null;
-  const comp = componentAtCenter(mask);
 
-  // 5) Contorno → polígono en píxeles → lon/lat.
-  const contour = traceBoundary(comp);
+  const comp = componentAtCenter(mask);
+  const contour = traceBoundary(comp).filter((_, i) => i % 4 === 0);
   if (contour.length < 4) return null;
+
   const ring: GeoJSON.Position[] = contour.map(([r, cc]) => {
-    const fx = (cc + 0.5) / PX;
-    const fy = (r + 0.5) / PX;
-    const X = minX + fx * (maxX - minX);
-    const Y = maxY - fy * (maxY - minY); // fila 0 = norte (maxY)
+    const X = minX + ((cc + 0.5) / PX) * (maxX - minX);
+    const Y = maxY - ((r + 0.5) / PX) * (maxY - minY);
     return from3857(X, Y);
   });
-  if (
-    ring[0][0] !== ring[ring.length - 1][0] ||
-    ring[0][1] !== ring[ring.length - 1][1]
-  ) {
+  if (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1]) {
     ring.push(ring[0]);
   }
-
-  return {
-    polygon: { type: "Polygon", coordinates: [ring] },
-    iou,
-    coveragePct: Number(((100 * on) / (PX * PX)).toFixed(1)),
-  };
+  return { polygon: { type: "Polygon", coordinates: [ring] }, iou };
 }
 
 function componentAtCenter(mask: boolean[][]): boolean[][] {
@@ -250,6 +240,5 @@ function traceBoundary(mask: boolean[][]): [number, number][] {
     if (!found) break;
     guard++;
   } while ((curr[0] !== start[0] || curr[1] !== start[1]) && guard < max);
-  // Submuestrear el contorno (1 de cada 4 px) para aligerar antes de simplificar.
-  return contour.filter((_, i) => i % 4 === 0);
+  return contour;
 }

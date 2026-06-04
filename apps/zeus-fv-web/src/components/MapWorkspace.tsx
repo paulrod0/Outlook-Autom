@@ -513,20 +513,17 @@ export function MapWorkspace() {
         const wLat = (b[3] - b[1]) * 111000;
         boxM = Math.min(220, Math.max(50, Math.max(wLon, wLat) + 25));
       }
-      const res = await fetch("/api/roof-segment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lat: center.lat, lon: center.lon, boxM }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error ?? "IA: error");
+      // MobileSAM corre EN EL NAVEGADOR (onnxruntime-web).
+      const { segmentRoofClient } = await import("@/lib/roofSegmentClient");
+      const data = await segmentRoofClient(
+        center.lat,
+        center.lon,
+        boxM,
+        (msg) => setSamInfo(msg),
+      );
+      if (!data) {
+        throw new Error("La IA no detectó un tejado claro. Centra mejor o usa trazado manual.");
       }
-      const data = (await res.json()) as {
-        polygon: GeoJSON.Polygon;
-        iou: number;
-        coveragePct: number;
-      };
       // Simplificar el contorno (cientos de vértices del ráster) a líneas limpias.
       let geom = data.polygon;
       try {

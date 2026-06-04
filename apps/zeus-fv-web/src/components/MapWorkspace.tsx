@@ -67,6 +67,8 @@ export function MapWorkspace() {
   const [googleQuality, setGoogleQuality] = useState<string | null>(null);
   const [busyLidar, setBusyLidar] = useState(false);
   const [lidarInfo, setLidarInfo] = useState<string | null>(null);
+  const [busySam, setBusySam] = useState(false);
+  const [samInfo, setSamInfo] = useState<string | null>(null);
   const [basemap, setBasemap] = useState<"pnoa" | "esri">("pnoa");
   const project = useProjectState();
 
@@ -494,6 +496,111 @@ export function MapWorkspace() {
       });
     } finally {
       setBusyGoogle(false);
+    }
+  };
+
+  const segmentWithAI = async () => {
+    const center = project.centroid ?? null;
+    if (!center) return;
+    setBusySam(true);
+    setSamInfo(null);
+    try {
+      // Caja: si hay polígono, su tamaño + margen; si no, 80 m.
+      let boxM = 80;
+      if (project.parcelGeometry) {
+        const b = turf.bbox(turf.feature(project.parcelGeometry));
+        const wLon = (b[2] - b[0]) * 85000;
+        const wLat = (b[3] - b[1]) * 111000;
+        boxM = Math.min(220, Math.max(50, Math.max(wLon, wLat) + 25));
+      }
+      const res = await fetch("/api/roof-segment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: center.lat, lon: center.lon, boxM }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error ?? "IA: error");
+      }
+      const data = (await res.json()) as {
+        polygon: GeoJSON.Polygon;
+        iou: number;
+        coveragePct: number;
+      };
+      // Simplificar el contorno (cientos de vértices del ráster) a líneas limpias.
+      let geom = data.polygon;
+      try {
+        geom = turf.simplify(turf.feature(data.polygon), {
+          tolerance: 0.000015,
+          highQuality: true,
+        }).geometry as GeoJSON.Polygon;
+      } catch {
+        /* usar sin simplificar */
+      }
+
+      // Casas ADOSADAS: SAM coge toda la hilera (comparten tejado). Para una
+      // Comunidad Energética POR REFERENCIA CATASTRAL recortamos a la parcela
+      // de Catastro (que en PNOA alinea bien). Si la casa es aislada (SAM ≈
+      // parcela) usamos el recorte preciso de la IA tal cual.
+      let clippedToParcel = false;
+      const prevParcel = project.parcelGeometry;
+      const samArea = turf.area(turf.feature(geom));
+      if (prevParcel) {
+        const parcelArea = turf.area(turf.feature(prevParcel));
+        if (parcelArea > 20 && samArea > parcelArea * 1.5) {
+          try {
+            const inter = turf.intersect(
+              turf.featureCollection([
+                turf.feature(geom),
+                turf.feature(prevParcel),
+              ]),
+            );
+            if (inter && inter.geometry) {
+              if (inter.geometry.type === "Polygon") {
+                geom = inter.geometry;
+                clippedToParcel = true;
+              } else if (inter.geometry.type === "MultiPolygon") {
+                let best: GeoJSON.Polygon | null = null;
+                let bestA = 0;
+                for (const coords of inter.geometry.coordinates) {
+                  const p: GeoJSON.Polygon = { type: "Polygon", coordinates: coords };
+                  const a2 = turf.area(turf.feature(p));
+                  if (a2 > bestA) {
+                    bestA = a2;
+                    best = p;
+                  }
+                }
+                if (best) {
+                  geom = best;
+                  clippedToParcel = true;
+                }
+              }
+            }
+          } catch {
+            /* si falla intersect, usamos SAM sin recortar */
+          }
+        }
+      }
+      const areaM2 = turf.area(turf.feature(geom));
+      const centroidCoords = turf.centroid(turf.feature(geom)).geometry
+        .coordinates as [number, number];
+      setState({
+        parcelGeometry: geom,
+        parcelAreaM2: Math.round(areaM2),
+        buildingGeometry: null,
+        roofPlanes: [],
+        centroid: { lon: centroidCoords[0], lat: centroidCoords[1] },
+        status: "computing",
+      });
+      await runLayoutAndPvgis();
+      setSamInfo(
+        `Tejado IA · ${Math.round(areaM2)} m² · fiab. ${Math.round(data.iou * 100)}%` +
+          (clippedToParcel ? " · recortado a refcat (adosada)" : ""),
+      );
+    } catch (err) {
+      setSamInfo(err instanceof Error ? `IA: ${err.message}` : "Error IA");
+    } finally {
+      setBusySam(false);
     }
   };
 
@@ -1034,12 +1141,28 @@ export function MapWorkspace() {
           {project.centroid && (
             <button
               type="button"
+              onClick={() => void segmentWithAI()}
+              disabled={busySam}
+              className="rounded-md bg-gradient-to-r from-fuchsia-500 to-indigo-500 px-3 py-1.5 text-xs font-medium text-white shadow ring-1 ring-white/10 hover:opacity-90 disabled:opacity-40"
+              title="IA de visión (MobileSAM) sobre la ortofoto PNOA: recorta el tejado exacto al píxel bajo el punto. Local y gratis."
+            >
+              {busySam ? "Segmentando con IA…" : "🤖 Detectar tejado (IA visión)"}
+            </button>
+          )}
+          {samInfo && (
+            <p className="rounded-md bg-fuchsia-500/20 px-2 py-1 text-[10px] leading-tight text-fuchsia-100">
+              {samInfo}
+            </p>
+          )}
+          {project.centroid && (
+            <button
+              type="button"
               onClick={() => void analyzeWithLidar()}
               disabled={busyLidar}
               className="rounded-md bg-gradient-to-r from-emerald-500 to-teal-500 px-3 py-1.5 text-xs font-medium text-white shadow ring-1 ring-white/10 hover:opacity-90 disabled:opacity-40"
-              title="Análisis con LiDAR del IGN (gratis): detecta inclinación, orientación, altura y la huella real del edificio. Cobertura España."
+              title="Análisis con LiDAR del IGN (gratis): inclinación, orientación, altura y huella del edificio. Úsalo tras detectar el tejado para sacar tilt/azimut."
             >
-              {busyLidar ? "Analizando LiDAR…" : "📡 Analizar cubierta (LiDAR IGN)"}
+              {busyLidar ? "Analizando LiDAR…" : "📡 Tilt/azimut (LiDAR IGN)"}
             </button>
           )}
           {lidarInfo && (

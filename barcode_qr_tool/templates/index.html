@@ -62,6 +62,18 @@
           <input type="checkbox" id="show_text" checked /> Mostrar texto legible
         </label>
       </div>
+
+      <div class="row">
+        <label class="check">
+          <input type="checkbox" id="show_subtitle" /> Segunda línea de texto
+        </label>
+        <label>Tamaño 2ª línea (pt)
+          <input type="number" id="subtitle_font_size_pt" value="8" step="1" min="5" />
+        </label>
+        <label id="logo-wrap">Logo central (QR)
+          <input type="file" id="logo" accept="image/*" />
+        </label>
+      </div>
     </section>
 
     <section class="panel">
@@ -75,9 +87,13 @@
         <label>Referencia / texto / URL
           <input type="text" id="value" placeholder="Ej. REF-00123 o https://..." />
         </label>
+        <label id="subtitle-wrap" hidden>Segunda línea (descripción, precio…)
+          <input type="text" id="subtitle" placeholder="Ej. Tornillo M6 — A-01-03" />
+        </label>
         <div class="actions">
           <button id="btn-preview">Previsualizar</button>
           <button id="btn-download" class="primary">Descargar PNG</button>
+          <button id="btn-download-svg">Descargar SVG</button>
         </div>
       </div>
 
@@ -88,11 +104,23 @@
         <label>Columna de referencias
           <select id="column" disabled><option>Sube un archivo primero</option></select>
         </label>
+        <label id="subtitle-col-wrap" hidden>Columna de la 2ª línea (opcional)
+          <select id="subtitle_column"><option value="">— ninguna —</option></select>
+        </label>
+        <label>Plantilla predefinida (para PDF)
+          <select id="template">
+            <option value="">— rejilla automática —</option>
+            {% for key, name in templates.items() %}
+            <option value="{{ key }}">{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
         <label class="check">
           <input type="checkbox" id="dedupe" checked /> Omitir duplicados
         </label>
         <div class="actions">
-          <button id="btn-zip" class="primary">Descargar ZIP</button>
+          <button id="btn-zip" class="primary">ZIP (PNG)</button>
+          <button id="btn-svg">ZIP (SVG vectorial)</button>
           <button id="btn-pdf">Hoja PDF imprimible</button>
         </div>
       </div>

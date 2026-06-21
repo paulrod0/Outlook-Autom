@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generador de Códigos de Barras y QR</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header>
+    <h1>📊 Generador de Códigos de Barras y QR</h1>
+    <p class="sub">Lote e individual para almacenes — sin suscripciones</p>
+  </header>
+
+  <main>
+    <section class="panel config">
+      <h2>1 · Configuración</h2>
+
+      <div class="row">
+        <label>Tipo de código
+          <select id="mode">
+            <option value="qr">Código QR</option>
+            <option value="barcode">Código de barras</option>
+          </select>
+        </label>
+        <label id="symbology-wrap" hidden>Simbología
+          <select id="symbology">
+            {% for key, name in symbologies.items() %}
+            <option value="{{ key }}">{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label id="qr-error-wrap">Corrección de error (QR)
+          <select id="qr_error">
+            {% for lvl in qr_levels %}
+            <option value="{{ lvl }}" {% if lvl == 'M' %}selected{% endif %}>{{ lvl }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+
+      <div class="row">
+        <label>Ancho etiqueta (cm)
+          <input type="number" id="label_width_cm" value="5" step="0.1" min="0.5" />
+        </label>
+        <label>Alto etiqueta (cm)
+          <input type="number" id="label_height_cm" value="3" step="0.1" min="0.5" />
+        </label>
+        <label>Alto del código (cm)
+          <input type="number" id="bar_height_cm" value="1.5" step="0.1" min="0.2" />
+        </label>
+      </div>
+
+      <div class="row">
+        <label>Resolución (DPI)
+          <input type="number" id="dpi" value="300" step="50" min="50" max="1200" />
+        </label>
+        <label>Tamaño texto (pt)
+          <input type="number" id="font_size_pt" value="10" step="1" min="6" />
+        </label>
+        <label class="check">
+          <input type="checkbox" id="show_text" checked /> Mostrar texto legible
+        </label>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>2 · Generar</h2>
+      <div class="tabs">
+        <button class="tab active" data-tab="individual">Individual</button>
+        <button class="tab" data-tab="lote">Lote</button>
+      </div>
+
+      <div class="tabpane" id="tab-individual">
+        <label>Referencia / texto / URL
+          <input type="text" id="value" placeholder="Ej. REF-00123 o https://..." />
+        </label>
+        <div class="actions">
+          <button id="btn-preview">Previsualizar</button>
+          <button id="btn-download" class="primary">Descargar PNG</button>
+        </div>
+      </div>
+
+      <div class="tabpane" id="tab-lote" hidden>
+        <label>Archivo (.xlsx o .csv)
+          <input type="file" id="file" accept=".xlsx,.csv" />
+        </label>
+        <label>Columna de referencias
+          <select id="column" disabled><option>Sube un archivo primero</option></select>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="dedupe" checked /> Omitir duplicados
+        </label>
+        <div class="actions">
+          <button id="btn-zip" class="primary">Descargar ZIP</button>
+          <button id="btn-pdf">Hoja PDF imprimible</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel preview">
+      <h2>Vista previa</h2>
+      <div id="preview-box" class="preview-box">
+        <span class="hint">La etiqueta aparecerá aquí</span>
+      </div>
+      <p id="status" class="status"></p>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

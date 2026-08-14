@@ -1,0 +1,13 @@
+{
+  "name": "claude-monitor",
+  "version": "0.1.0",
+  "description": "Panel en terminal para vigilar sesiones locales de Claude Code",
+  "bin": {
+    "claude-monitor": "./claude-monitor.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
